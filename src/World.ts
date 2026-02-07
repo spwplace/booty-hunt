@@ -61,7 +61,7 @@ interface IslandTypeConfig {
   treasureChance: number;
 }
 
-const ISLAND_TYPE_CONFIGS: Record<IslandType, IslandTypeConfig> = {
+export const ISLAND_TYPE_CONFIGS: Record<IslandType, IslandTypeConfig> = {
   rocky: {
     minRadius: 5,
     maxRadius: 9,
@@ -92,7 +92,7 @@ const ISLAND_TYPE_CONFIGS: Record<IslandType, IslandTypeConfig> = {
 //  Constants
 // ===================================================================
 
-const ISLAND_BASE_Y = 0.8; // raised above typical wave peak (~0.5)
+export const ISLAND_BASE_Y = 0.8; // raised above typical wave peak (~0.5)
 
 // ===================================================================
 //  Geometry builders
@@ -632,7 +632,7 @@ function buildFortressIsland(rng: () => number, radius: number): THREE.Group {
 }
 
 // Dispatch to the correct builder
-function buildIslandMesh(island: Island): THREE.Group {
+export function buildIslandMesh(island: Island): THREE.Group {
   const rng = mulberry32(island.seed);
   let meshGroup: THREE.Group;
 
@@ -948,6 +948,26 @@ export class WorldSystem {
       z: island.pos.z,
       radius: island.reefRadius,
     }));
+  }
+
+  // ---------------------------------------------------------------
+  //  Editor support: load islands directly + force-create all meshes
+  // ---------------------------------------------------------------
+
+  loadIslands(islands: Island[]): void {
+    this.dispose();
+    this.islands = islands;
+  }
+
+  forceCreateAllMeshes(): void {
+    for (const island of this.islands) {
+      if (!island.meshCreated) {
+        const meshGroup = buildIslandMesh(island);
+        this.scene.add(meshGroup);
+        island.meshGroup = meshGroup;
+        island.meshCreated = true;
+      }
+    }
   }
 
   // ---------------------------------------------------------------

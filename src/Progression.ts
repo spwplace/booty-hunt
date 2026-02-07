@@ -699,6 +699,10 @@ export class ProgressionSystem {
   private endlessMode: boolean;
   private activeDoctrine: V2Doctrine | null;
 
+  // Custom wave table (for scenario editor play-test)
+  private customWaveTable: WaveConfigV1[] | null = null;
+  private customFinalWave: number = FINAL_WAVE;
+
   constructor() {
     this.stats = createDefaultStats();
     this.wave = 1;
@@ -1017,6 +1021,9 @@ export class ProgressionSystem {
 
   /** True if current wave is a boss wave (uses WAVE_TABLE or every 5th in endless) */
   isBossWave(): boolean {
+    if (this.customWaveTable && this.wave >= 1 && this.wave <= this.customWaveTable.length) {
+      return this.customWaveTable[this.wave - 1].bossName !== null;
+    }
     if (this.wave <= FINAL_WAVE) {
       const entry = WAVE_TABLE[this.wave - 1];
       return entry.bossName !== null;
@@ -1027,6 +1034,9 @@ export class ProgressionSystem {
 
   /** True if current wave is a port wave (from WAVE_TABLE) */
   isPortWave(): boolean {
+    if (this.customWaveTable && this.wave >= 1 && this.wave <= this.customWaveTable.length) {
+      return this.customWaveTable[this.wave - 1].isPortWave;
+    }
     if (this.wave <= FINAL_WAVE) {
       return WAVE_TABLE[this.wave - 1].isPortWave;
     }
@@ -1044,6 +1054,18 @@ export class ProgressionSystem {
     this.endlessMode = enabled;
   }
 
+  /** Load a custom wave table (scenario editor play-test) */
+  setCustomWaveTable(table: WaveConfigV1[]): void {
+    this.customWaveTable = table;
+    this.customFinalWave = table.length;
+  }
+
+  /** Clear custom wave table, reverting to default WAVE_TABLE */
+  clearCustomWaveTable(): void {
+    this.customWaveTable = null;
+    this.customFinalWave = FINAL_WAVE;
+  }
+
   // -----------------------------------------------------------------------
   // Wave configuration (now uses WAVE_TABLE for waves 1-12)
   // -----------------------------------------------------------------------
@@ -1054,6 +1076,11 @@ export class ProgressionSystem {
    */
   getWaveConfigV1(wave?: number): WaveConfigV1 {
     const w = wave ?? this.wave;
+
+    // Custom wave table takes priority (scenario editor play-test)
+    if (this.customWaveTable && w >= 1 && w <= this.customWaveTable.length) {
+      return { ...this.customWaveTable[w - 1] };
+    }
 
     if (w >= 1 && w <= FINAL_WAVE) {
       return { ...WAVE_TABLE[w - 1] };
@@ -1099,7 +1126,7 @@ export class ProgressionSystem {
   checkVictory(wave?: number): boolean {
     const w = wave ?? this.wave;
     // Victory happens when the final wave is completed
-    return this.runStats.wavesCompleted >= FINAL_WAVE;
+    return this.runStats.wavesCompleted >= this.customFinalWave;
   }
 
   // -----------------------------------------------------------------------

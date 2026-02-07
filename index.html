@@ -76,10 +76,24 @@
       letter-spacing: 0.05em;
       pointer-events: auto;
     }
-    #screensaver-btn:hover {
+    #screensaver-btn:hover, #editor-btn:hover {
       border-color: rgba(255, 215, 0, 0.6);
       color: #FFD700;
       background: rgba(255, 215, 0, 0.08);
+    }
+    #editor-btn {
+      display: block;
+      margin: 0.5rem auto 0;
+      padding: 0.5rem 1.5rem;
+      background: transparent;
+      border: 1px solid rgba(255, 215, 0, 0.3);
+      color: rgba(255, 215, 0, 0.6);
+      font-family: 'Pirata One', 'Georgia', serif;
+      font-size: clamp(0.7rem, 2vw, 0.95rem);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      letter-spacing: 0.05em;
+      pointer-events: auto;
     }
     @keyframes pulse {
       0%, 100% { opacity: 0.3; }
@@ -592,29 +606,29 @@
     /* ---- Captain's Log ---- */
     #captains-log {
       position: absolute;
-      top: 92px; left: 50%;
-      transform: translateX(-50%) translateY(-10px);
-      max-width: min(760px, calc(100vw - 32px));
-      padding: 10px 16px;
-      border-radius: 8px;
-      color: rgba(245, 236, 206, 0.95);
+      bottom: 72px; left: 50%;
+      transform: translateX(-50%) translateY(6px);
+      max-width: min(600px, calc(100vw - 48px));
+      padding: 6px 14px;
+      border-radius: 6px;
+      color: rgba(245, 236, 206, 0.85);
       background: linear-gradient(
         to right,
-        rgba(9, 10, 16, 0.15),
-        rgba(12, 16, 26, 0.78),
-        rgba(9, 10, 16, 0.15)
+        rgba(9, 10, 16, 0.1),
+        rgba(12, 16, 26, 0.68),
+        rgba(9, 10, 16, 0.1)
       );
-      border: 1px solid rgba(255, 215, 0, 0.28);
+      border: 1px solid rgba(255, 215, 0, 0.18);
       text-shadow: 1px 1px 0 #000;
-      font-size: 1rem;
-      line-height: 1.4;
+      font-size: 0.82rem;
+      line-height: 1.35;
       text-align: center;
       opacity: 0;
       z-index: 16;
       pointer-events: none;
       transition: opacity 0.25s ease, transform 0.25s ease;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(3px);
+      -webkit-backdrop-filter: blur(3px);
     }
     #captains-log.show {
       opacity: 1;
@@ -1482,33 +1496,34 @@
     /* ---- Tutorial Overlay ---- */
     #tutorial-overlay {
       position: fixed;
-      left: 0; right: 0; bottom: 0;
-      height: 30%;
-      background: linear-gradient(transparent, rgba(0,0,0,0.8));
+      bottom: 160px; left: 50%;
+      transform: translateX(-50%);
       display: flex;
-      flex-direction: column;
       align-items: center;
-      justify-content: flex-end;
-      padding-bottom: 3rem;
+      gap: 12px;
+      background: rgba(0,0,0,0.75);
+      border: 1px solid rgba(255,215,0,0.25);
+      border-radius: 8px;
+      padding: 8px 18px;
       z-index: 108;
       pointer-events: none;
       font-family: 'Pirata One', cursive;
+      white-space: nowrap;
     }
     #tutorial-text {
-      font-size: clamp(1rem, 3vw, 1.6rem);
+      font-size: clamp(0.9rem, 2.2vw, 1.15rem);
       color: rgba(255,255,255,0.9);
-      text-shadow: 2px 2px 0 #000, 0 0 12px rgba(255,200,0,0.3);
+      text-shadow: 1px 1px 0 #000, 0 0 8px rgba(255,200,0,0.25);
       text-align: center;
-      margin-bottom: 1rem;
     }
     #tutorial-skip {
       font-family: 'Pirata One', cursive;
-      font-size: 0.85rem;
-      color: rgba(255,255,255,0.5);
-      background: rgba(0,0,0,0.4);
-      border: 1px solid rgba(255,255,255,0.2);
+      font-size: 0.75rem;
+      color: rgba(255,255,255,0.4);
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 4px;
-      padding: 0.3rem 1rem;
+      padding: 2px 8px;
       cursor: pointer;
       pointer-events: auto;
       transition: color 0.2s, border-color 0.2s;
@@ -1651,6 +1666,7 @@
       <p class="subtitle">The ocean be vast... but so be yer greed</p>
       <p class="hint" id="title-hint">Press any key to set sail</p>
       <button id="screensaver-btn">Watch the Seas</button>
+      <button id="editor-btn" onmousedown="window.__enterEditor?.()">Level Editor</button>
     </div>
     <div id="score"><span class="label">Gold Plundered</span>0</div>
     <div id="combo"></div>

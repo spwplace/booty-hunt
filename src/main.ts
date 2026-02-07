@@ -30,6 +30,11 @@ import type { MerchantV1, WaveConfigV1, EnemyType, RunStats, EventType, IslandTy
 import type { ShipClass, ShipClassConfig } from './Types';
 import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS, SHIP_CLASS_CONFIGS } from './Types';
 import { DevPanel } from './DevPanel';
+import { EditorCamera } from './EditorCamera';
+import { ScenarioEditor } from './ScenarioEditor';
+import { EditorUI } from './EditorUI';
+import type { Scenario, ScenarioWave } from './Scenario';
+import { createEmptyScenario, createDefaultWave, scenarioWavesToWaveTable, scenarioFromURLHash } from './Scenario';
 import { V2ContentRegistry } from './V2Content';
 import type { V2Doctrine, V2EventCard } from './V2Content';
 import { NarrativeSystem } from './NarrativeSystem';
@@ -2108,6 +2113,14 @@ let screensaverSpawnTimer = 0;
 let devGodMode = false;
 let devInstakill = false;
 
+// Scenario editor state
+let editorMode = false;
+let editorPlayTestMode = false;
+let scenarioEditor: ScenarioEditor | null = null;
+let editorUI: EditorUI | null = null;
+let editorCamera: EditorCamera | null = null;
+let playTestScenario: Scenario | null = null;
+
 const devPanel = new DevPanel({
   onSetGold: (v) => { progression.devSetScore(v); ui.updateScore(v); },
   onSetHealth: (v) => {
@@ -2244,6 +2257,29 @@ window.addEventListener('keydown', (e) => {
   if (e.key === ' ' || e.key.startsWith('Arrow') || 'wasdqemcx'.includes(e.key.toLowerCase())) {
     e.preventDefault();
   }
+
+  // Editor mode input handling
+  if (editorMode && !editorPlayTestMode) {
+    if (e.key === '`') { devPanel?.toggle(); return; }
+    if (e.key === 'Escape') { exitEditorMode(); return; }
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); scenarioEditor?.redo(); return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); scenarioEditor?.undo(); return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); scenarioEditor?.redo(); return; }
+    if (e.key === 'Delete' && scenarioEditor && scenarioEditor.getSelectedIndex() >= 0) {
+      scenarioEditor.removeIsland(scenarioEditor.getSelectedIndex());
+      editorUI?.refresh();
+      return;
+    }
+    // Let EditorCamera handle WASD
+    return;
+  }
+  if (editorPlayTestMode) {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === 'Escape') { exitPlayTestMode(); return; }
+    if (e.key === '`') { devPanel?.toggle(); return; }
+    // Fall through to normal game input handling for Q/E/WASD
+  }
+
   if (runSetupOpen) {
     if (e.key.toLowerCase() === 'escape') {
       runSetupOpen = false;
@@ -2251,10 +2287,10 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
-  keys[e.key.toLowerCase()] = true;
+  if (!editorPlayTestMode) keys[e.key.toLowerCase()] = true;
   if (e.key === '`') { devPanel?.toggle(); return; }
   if (screensaverActive && e.key !== 'F5' && e.key !== 'F12') { stopScreensaver(); return; }
-  if (!gameStarted && !screensaverActive && e.key !== 'F5' && e.key !== 'F12' && e.key.toLowerCase() !== 'c') {
+  if (!gameStarted && !screensaverActive && !editorMode && e.key !== 'F5' && e.key !== 'F12' && e.key.toLowerCase() !== 'c') {
     openRunSetup();
     return;
   }
@@ -2417,12 +2453,14 @@ window.addEventListener('touchstart', handleTouchStart, { passive: false });
 window.addEventListener('touchmove', handleTouchMove, { passive: false });
 window.addEventListener('touchend', handleTouchEnd);
 window.addEventListener('touchcancel', handleTouchEnd);
-window.addEventListener('mousedown', () => {
+window.addEventListener('mousedown', (e) => {
   if (screensaverActive) {
     stopScreensaver();
     return;
   }
-  if (!gameStarted && !runSetupOpen) {
+  const target = e.target as HTMLElement;
+  if (target.closest('#screensaver-btn, #editor-btn')) return;
+  if (!gameStarted && !runSetupOpen && !editorMode && target.closest('#title')) {
     openRunSetup();
   }
 });
@@ -2712,6 +2750,242 @@ if (codexToggleBtn) {
   });
 }
 
+// Wire up editor button
+(window as any).__enterEditor = () => enterEditorMode();
+
+// ===================================================================
+//  Scenario Editor Functions
+// ===================================================================
+
+function enterEditorMode(scenario?: Scenario): void {
+  if (editorMode) return;
+  if (screensaverActive) stopScreensaver();
+  if (gameStarted) return; // don't enter from mid-game
+
+  // Close run setup if it raced open from the window mousedown
+  if (runSetupOpen) {
+    runSetupOpen = false;
+    ui.hideShipSelect();
+  }
+
+  editorMode = true;
+  editorPlayTestMode = false;
+
+  // Hide title screen and game HUD
+  const titleEl = document.getElementById('title');
+  if (titleEl) titleEl.style.display = 'none';
+  ui.hideAll();
+
+  const sc = scenario ?? createEmptyScenario();
+
+  // Lazy init editor systems
+  if (!editorCamera) editorCamera = new EditorCamera();
+  if (!scenarioEditor) scenarioEditor = new ScenarioEditor();
+  if (!editorUI) {
+    editorUI = new EditorUI({
+      onToolChange: (tool) => scenarioEditor?.setTool(tool),
+      onIslandTypeSelect: (type) => scenarioEditor?.setPlaceType(type),
+      onIslandPropertyChange: (index, key, value) => {
+        scenarioEditor?.updateIslandProperty(index, key as keyof import('./Scenario').ScenarioIsland, value as never);
+      },
+      onWaveAdd: () => {
+        const s = editorUI?.getScenario();
+        if (s) { s.waves.push(createDefaultWave()); editorUI?.refresh(); }
+      },
+      onWaveEdit: (index, wave) => {
+        const s = editorUI?.getScenario();
+        if (s && index >= 0 && index < s.waves.length) { s.waves[index] = wave; editorUI?.refresh(); }
+      },
+      onWaveDelete: (index) => {
+        const s = editorUI?.getScenario();
+        if (s && s.waves.length > 1) { s.waves.splice(index, 1); editorUI?.refresh(); }
+      },
+      onWaveReorder: (from, to) => {
+        const s = editorUI?.getScenario();
+        if (s && from >= 0 && from < s.waves.length && to >= 0 && to < s.waves.length) {
+          const [moved] = s.waves.splice(from, 1);
+          s.waves.splice(to, 0, moved);
+          editorUI?.refresh();
+        }
+      },
+      onWinConditionChange: (conditions) => {
+        const s = editorUI?.getScenario();
+        if (s) s.winConditions = conditions;
+      },
+      onSave: () => {},
+      onLoad: (loadedScenario) => {
+        exitEditorMode();
+        enterEditorMode(loadedScenario);
+      },
+      onPlayTest: () => enterPlayTestMode(),
+      onExitEditor: () => exitEditorMode(),
+      onUndo: () => scenarioEditor?.undo(),
+      onRedo: () => scenarioEditor?.redo(),
+      onStartWeatherChange: (w) => {
+        const s = editorUI?.getScenario();
+        if (s) { s.startWeather = w; weather.transitionTo(w, 2); }
+      },
+    });
+  }
+
+  // Wire up editor ↔ UI callbacks
+  scenarioEditor.onSelectionChanged = (index) => {
+    const island = scenarioEditor?.getSelectedIsland() ?? null;
+    editorUI?.refreshProperties(index, island);
+  };
+  scenarioEditor.onIslandsChanged = () => {
+    editorUI?.refresh();
+  };
+
+  editorCamera.enable();
+  scenarioEditor.enter(sc, scene, camera, world, ocean);
+  editorUI.show(sc);
+
+  // Set starting weather
+  weather.transitionTo(sc.startWeather, 1);
+}
+
+function exitEditorMode(): void {
+  if (!editorMode) return;
+  editorMode = false;
+  editorPlayTestMode = false;
+
+  editorCamera?.disable();
+  scenarioEditor?.exit();
+  editorUI?.hide();
+
+  // Dispose world and restore title
+  world.dispose();
+
+  ui.showAll();
+  const titleEl = document.getElementById('title');
+  if (titleEl) {
+    titleEl.style.display = '';
+    titleEl.style.opacity = '1';
+  }
+}
+
+function enterPlayTestMode(): void {
+  if (!editorMode || !editorUI || !scenarioEditor) return;
+
+  const sc = editorUI.getScenario();
+  if (!sc || sc.waves.length === 0) return;
+
+  playTestScenario = sc;
+  editorPlayTestMode = true;
+
+  // Disable editor systems but keep editor mode flag
+  editorCamera?.disable();
+  scenarioEditor.exit();
+  editorUI.hide();
+
+  // Show game HUD
+  ui.showAll();
+  const titleEl = document.getElementById('title');
+  if (titleEl) titleEl.style.display = 'none';
+
+  // Reload islands into world from scenario
+  const islands = sc.islands.map((si, i) => {
+    const config = (window as any).__ISLAND_TYPE_CONFIGS ?? {};
+    // Build Island objects from ScenarioIsland
+    return {
+      type: si.type as IslandType,
+      name: `Island ${i + 1}`,
+      pos: new THREE.Vector3(si.x, 0.8, si.z),
+      radius: si.radius,
+      reefRadius: si.radius * 1.6,
+      hasTreasure: si.hasTreasure,
+      treasureCollected: false,
+      meshCreated: false,
+      meshGroup: null as THREE.Group | null,
+      seed: si.seed,
+    };
+  });
+  world.loadIslands(islands);
+  world.forceCreateAllMeshes();
+  ocean.setReefPositions(world.getReefData());
+
+  // Set custom wave table
+  const waveTable = scenarioWavesToWaveTable(sc.waves);
+  progression.reset();
+  progression.initializeStats('brigantine');
+  progression.setCustomWaveTable(waveTable);
+
+  // Start game
+  gameStarted = true;
+  gamePaused = false;
+
+  // Reset player position
+  playerPos.set(0, 0, 0);
+  playerAngle = 0;
+  playerSpeed = 0;
+
+  // Sync player stats
+  syncUpgradesToCombat();
+  const stats = progression.getPlayerStats();
+  ui.updateHealth(stats.health, stats.maxHealth);
+  ui.updateScore(0);
+
+  // Begin first wave (simplified — no V2 overlays)
+  beginPlayTestWave();
+}
+
+function beginPlayTestWave(): void {
+  progression.startWave();
+  const config = progression.getWaveConfigV1();
+  activeWaveConfigV1 = config;
+  progression.onWaveStart();
+  scoreAtWaveStart = progression.getScore();
+
+  // Apply crew bonuses
+  progression.applyCrewBonuses(crew.getCrewBonuses());
+  syncUpgradesToCombat();
+
+  // Announce wave
+  ui.showWaveAnnouncement(config.wave, config.bossName !== null);
+  waveAnnouncePending = true;
+  waveAnnounceTimer = 1.5;
+
+  // Weather transition
+  weather.transitionTo(config.weather, config.wave === 1 ? 1 : 10);
+  audio.setWeatherIntensity(weather.getCurrentConfig().windIntensity);
+
+  if (config.wave > 1) audio.playWaveComplete();
+
+  // Trigger special event if wave specifies one
+  if (config.specialEvent) {
+    events.startEvent(config.specialEvent, playerPos, world.getIslands().length);
+  }
+}
+
+function exitPlayTestMode(): void {
+  if (!editorPlayTestMode || !playTestScenario) return;
+  editorPlayTestMode = false;
+  gameStarted = false;
+  gamePaused = false;
+  gameOverFired = false;
+
+  // Clean up merchants
+  for (let i = merchants.length - 1; i >= 0; i--) {
+    scene.remove(merchants[i].mesh);
+  }
+  merchants.length = 0;
+  currentBoss = null;
+
+  // Reset progression
+  progression.clearCustomWaveTable();
+  progression.reset();
+
+  // Hide game HUD
+  ui.hideAll();
+  ui.hideBossHealthBar();
+
+  // Re-enter editor with the same scenario
+  editorMode = false; // reset so enterEditorMode works
+  enterEditorMode(playTestScenario);
+  playTestScenario = null;
+}
+
 function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: string = selectedDoctrineId) {
   const availableShips = getRunSetupShipConfigs();
   const fallbackShip = availableShips.find((cfg) => !cfg.locked)?.id ?? 'brigantine';
@@ -2860,11 +3134,6 @@ async function beginWave() {
       config.weather,
       config.totalShips,
       config.armedPercent,
-      {
-        regionName: nodeRegion?.name,
-        nodeLabel: currentNode?.label,
-        factionName: dominantFactionName ?? undefined,
-      },
     );
 
     // Wave announcement
@@ -3012,6 +3281,12 @@ async function onWaveComplete() {
   gamePaused = false;
 
   // Victory check — after final wave, show run summary
+  if (progression.checkVictory() && editorPlayTestMode) {
+    // Play-test victory: return to editor
+    waveCompleteInProgress = false;
+    exitPlayTestMode();
+    return;
+  }
   if (progression.checkVictory()) {
     closeCodex();
     pendingFactionReputation.clear();
@@ -3072,6 +3347,11 @@ async function onWaveComplete() {
     }
   }
   waveCompleteInProgress = false;
+  if (editorPlayTestMode) {
+    // Play-test: skip port visits, go straight to next wave
+    beginPlayTestWave();
+    return;
+  }
   const shouldPort = waveConfig.isPortWave || nextNode?.type === 'port';
   if (shouldPort) {
     enterPort();
@@ -3270,6 +3550,10 @@ function leavePort() {
 }
 
 async function onGameOver() {
+  if (editorPlayTestMode) {
+    exitPlayTestMode();
+    return;
+  }
   beginWaveInProgress = false;
   ui.hideChoicePrompt();
   closeCodex();
@@ -4531,6 +4815,13 @@ function animate(now: number) {
       screensaverWeatherIndex = (screensaverWeatherIndex + 1) % screensaverWeathers.length;
       weather.transitionTo(screensaverWeathers[screensaverWeatherIndex], 8);
     }
+  } else if (editorMode && !editorPlayTestMode) {
+    // Editor mode: fly-cam + ocean + weather visuals
+    editorCamera?.update(dt, camera);
+    scenarioEditor?.update(dt);
+    const weatherCfg = weather.getCurrentConfig();
+    weather.update(dt);
+    world.updateAnimations(time, weatherCfg.windIntensity);
   } else {
     // Title screen camera orbit
     camera.position.set(
@@ -4583,3 +4874,10 @@ function animate(now: number) {
 }
 
 requestAnimationFrame(animate);
+
+// URL hash check: load shared scenario on startup
+if (location.hash.startsWith('#scenario=')) {
+  scenarioFromURLHash(location.hash).then(s => {
+    if (s) enterEditorMode(s);
+  });
+}

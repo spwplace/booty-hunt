@@ -668,7 +668,6 @@ export class UI {
     weather: string,
     totalShips: number,
     armedPercent: number,
-    context?: { regionName?: string; nodeLabel?: string; factionName?: string },
   ) {
     if (!this.wavePreview) {
       this.wavePreview = document.getElementById('wave-preview');
@@ -685,26 +684,10 @@ export class UI {
     const emoji = weatherEmoji[weather] || '';
     const weatherLabel = weather.charAt(0).toUpperCase() + weather.slice(1);
 
-    const regionLine = context?.regionName
-      ? `<div style="font-size:13px;color:#9ec8ff;margin-top:4px;">${context.regionName}</div>`
-      : '';
-    const nodeLine = context?.nodeLabel
-      ? `<div style="font-size:12px;color:#cfd8e7;margin-top:2px;">${context.nodeLabel}</div>`
-      : '';
-    const factionLine = context?.factionName
-      ? `<div style="font-size:11px;color:#ffb7b7;margin-top:2px;">Pressure: ${context.factionName}</div>`
-      : '';
-
     this.wavePreview.innerHTML = `
-      <div style="font-size:28px;font-weight:bold;letter-spacing:2px;margin-bottom:6px;">
-        Wave ${wave}
-      </div>
       <div style="font-size:16px;color:#ccc;">
         ${emoji} ${weatherLabel} &mdash; ${totalShips} Ships &mdash; ${Math.round(armedPercent * 100)}% Armed
       </div>
-      ${regionLine}
-      ${nodeLine}
-      ${factionLine}
     `;
 
     this.wavePreview.style.display = 'flex';
@@ -1984,7 +1967,7 @@ export class UI {
         this.captainLogBusy = false;
         this.flushCaptainLogQueue();
       }, 280);
-    }, 3200);
+    }, 2000);
   }
 
   /* ------------------------------------------------------------------ */
@@ -2045,5 +2028,44 @@ export class UI {
     if (this.portCrewHireEl) {
       this.portCrewHireEl.innerHTML = '';
     }
+  }
+
+  // ---------------------------------------------------------------
+  //  Editor mode: hide/show all game HUD elements
+  // ---------------------------------------------------------------
+
+  private savedDisplays = new Map<HTMLElement, string>();
+
+  hideAll(): void {
+    const els = [
+      this.scoreEl,
+      this.compassEl,
+      this.controlsEl,
+      this.healthBar,
+      this.waveCounter,
+      this.bossHealthBar,
+      this.crewHudEl,
+      this.captainsLogEl,
+      this.v2ResourcesEl,
+      this.v2FactionEl,
+      this.eventTimerEl,
+      this.treasureMapEl,
+      this.minimapCanvas?.parentElement ?? null,
+      this.comboEl,
+      this.captureEl,
+      this.distanceEl,
+    ];
+    for (const el of els) {
+      if (!el) continue;
+      this.savedDisplays.set(el, el.style.display);
+      el.style.display = 'none';
+    }
+  }
+
+  showAll(): void {
+    for (const [el, display] of this.savedDisplays) {
+      el.style.display = display;
+    }
+    this.savedDisplays.clear();
   }
 }
