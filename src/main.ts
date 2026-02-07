@@ -8,6 +8,7 @@ import {
   FireEffect, FloatingDebris,
   KrakenTentacle, WhirlpoolEffect, SeaSerpentEffect,
   GhostShipEffect, FireShipExplosion, TreasureSparkle, VictoryConfetti,
+  PhoenixBurst, ChainShotTint, DavysPactAura,
 } from './Effects';
 import { UI } from './UI';
 import type { CodexViewModel, CodexSectionView, DoctrineSetupOption, ChoicePromptOption } from './UI';
@@ -109,6 +110,20 @@ const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 50
 
 const renderer = new THREE.WebGLRenderer({ antialias: !isMobile });
 let currentGraphicsQuality: 'low' | 'medium' | 'high' = 'high';
+let accessibilityUiScale = 1;
+
+const PANEL_SCALE_TARGET_IDS = [
+  'title',
+  'ship-select',
+  'port-overlay',
+  'pause-menu',
+  'settings-panel',
+  'choice-panel',
+  'run-summary',
+  'game-over',
+  'run-history-panel',
+  'codex-panel',
+];
 
 function getPixelRatioCap(quality: 'low' | 'medium' | 'high'): number {
   if (isMobile) {
@@ -132,27 +147,77 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 document.getElementById('game')!.appendChild(renderer.domElement);
 
+function isElementShown(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  const style = getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden') return false;
+  return Number(style.opacity) > 0.01;
+}
+
+function shouldUsePanelScale(): boolean {
+  for (const id of PANEL_SCALE_TARGET_IDS) {
+    if (isElementShown(document.getElementById(id) as HTMLElement | null)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function applyAdaptiveUIScale() {
   const uiRoot = document.getElementById('ui');
   if (!uiRoot) return;
   if (isMobile) {
-    uiRoot.style.setProperty('--ui-scale', '1');
+    if (uiRoot.style.getPropertyValue('--ui-scale') !== '1') {
+      uiRoot.style.setProperty('--ui-scale', '1');
+    }
     return;
   }
 
   const shortestEdge = Math.min(innerWidth, innerHeight);
-  const scale = THREE.MathUtils.clamp(shortestEdge / 630, 1.37, 2.21);
-  uiRoot.style.setProperty('--ui-scale', scale.toFixed(2));
+  const gameplayScale = THREE.MathUtils.clamp(shortestEdge / 730, 1.15, 1.95);
+  const panelScale = THREE.MathUtils.clamp(shortestEdge / 930, 1.0, 1.4);
+  const contextualScale = shouldUsePanelScale() ? panelScale : gameplayScale;
+  const scale = THREE.MathUtils.clamp(contextualScale * accessibilityUiScale, 0.9, 2.3);
+  const scaleString = scale.toFixed(2);
+  if (uiRoot.style.getPropertyValue('--ui-scale') !== scaleString) {
+    uiRoot.style.setProperty('--ui-scale', scaleString);
+  }
+}
+
+let uiScaleRefreshQueued = false;
+
+function scheduleAdaptiveUIScale() {
+  if (uiScaleRefreshQueued) return;
+  uiScaleRefreshQueued = true;
+  requestAnimationFrame(() => {
+    uiScaleRefreshQueued = false;
+    applyAdaptiveUIScale();
+  });
 }
 
 applyAdaptiveUIScale();
+
+const uiRootForScaleObserver = document.getElementById('ui');
+if (uiRootForScaleObserver) {
+  const uiScaleObserver = new MutationObserver(() => {
+    scheduleAdaptiveUIScale();
+  });
+  for (const id of PANEL_SCALE_TARGET_IDS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    uiScaleObserver.observe(el, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
+  }
+}
 
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   applyGraphicsQuality(currentGraphicsQuality);
-  applyAdaptiveUIScale();
+  scheduleAdaptiveUIScale();
 });
 
 // ===================================================================
@@ -276,8 +341,10 @@ function applyAccessibilitySettings(settings: RuntimeSettings['accessibility']):
   root.style.setProperty('--bh-text-scale', settings.textScale.toFixed(2));
   root.style.setProperty('--bh-flash-intensity', settings.flashIntensity.toFixed(2));
   document.body.dataset.colorblind = settings.colorblindMode;
+  accessibilityUiScale = settings.uiScale;
   accessibilityMotionIntensity = settings.motionIntensity;
   screenJuice.setFlashIntensity(settings.flashIntensity);
+  scheduleAdaptiveUIScale();
   if (accessibilityMotionIntensity <= 0.001) {
     screenShake.reset();
   }
@@ -292,7 +359,7 @@ function applyRuntimeSettings(settings: RuntimeSettings): void {
 }
 
 function updateRuntimeSetting(
-  key: 'master' | 'music' | 'sfx' | 'quality' | 'textScale' | 'motionIntensity' | 'flashIntensity' | 'colorblindMode',
+  key: 'master' | 'music' | 'sfx' | 'quality' | 'uiScale' | 'textScale' | 'motionIntensity' | 'flashIntensity' | 'colorblindMode',
   value: number | string,
 ): void {
   switch (key) {
@@ -308,6 +375,11 @@ function updateRuntimeSetting(
     case 'quality':
       applyRuntimeSettings(progression.updateRuntimeSettings({
         graphicsQuality: value === 'low' || value === 'medium' || value === 'high' ? value : 'high',
+      }));
+      break;
+    case 'uiScale':
+      applyRuntimeSettings(progression.updateRuntimeSettings({
+        accessibility: { uiScale: Number(value) },
       }));
       break;
     case 'textScale':
@@ -365,6 +437,10 @@ const seaSerpentEffect = new SeaSerpentEffect(scene);
 const fireShipExplosion = new FireShipExplosion(scene);
 const treasureSparkle = new TreasureSparkle(scene);
 const victoryConfetti = new VictoryConfetti(scene);
+const phoenixBurst = new PhoenixBurst(scene);
+
+// War drums timer (beats every ~2s during combat when upgrade active)
+let warDrumsTimer = 0;
 
 function triggerScreenShake(strength: number): void {
   screenShake.trigger(motionScale(strength));
@@ -1051,6 +1127,15 @@ function updateContractObjectiveTargetLabel(objective: ActiveContractObjective):
   objective.targetLabel = `${objective.target} ${objective.progressLabel}`;
 }
 
+function showRunChoicePrompt(title: string, detail: string, options: ChoicePromptOption[]): Promise<string> {
+  const econ = economy.getState();
+  return ui.showChoicePrompt(title, detail, options, {
+    supplies: econ.supplies,
+    intel: econ.intel,
+    reputationTokens: econ.reputationTokens,
+  });
+}
+
 async function resolveContractNegotiationChoice(objective: ActiveContractObjective | null): Promise<void> {
   if (!objective || screensaverActive) return;
 
@@ -1058,21 +1143,26 @@ async function resolveContractNegotiationChoice(objective: ActiveContractObjecti
     {
       id: 'aggressive',
       label: 'Aggressive Terms',
-      detail: 'Higher quota and stronger payout. Reputation hit if you fail.',
+      detail: 'The quartermaster sets down a blood-red contract and waits for your seal.',
+      benefitHint: 'High reward',
+      riskHint: 'High quota & penalties',
     },
     {
       id: 'balanced',
       label: 'Balanced Terms',
-      detail: 'Standard contract terms and penalties.',
+      detail: 'A plain ledger copy offers predictable terms and no surprises.',
+      benefitHint: 'Baseline terms',
     },
     {
       id: 'cautious',
       label: 'Cautious Terms',
-      detail: 'Lower quota and lighter penalties, but reduced rewards.',
+      detail: 'The clerk slides over conservative clauses fit for storm season.',
+      benefitHint: 'Low quota & penalties',
+      riskHint: 'Low reward',
     },
   ];
 
-  const choice = await ui.showChoicePrompt(
+  const choice = await showRunChoicePrompt(
     `${objective.factionName} Contract`,
     `Objective: ${objective.targetLabel}. Reward: ${formatContractRewardLine(objective)}. Penalty: ${formatContractPenaltyLine(objective) || 'None'}.`,
     options,
@@ -1448,19 +1538,26 @@ async function applyV2EventCard(
       tone = 'warning';
       break;
     case 'contraband_manifest_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Smuggler ledgers are aboard. Decide whether to forge papers or burn the books.',
         [
           {
             id: 'forge_manifest',
             label: 'Forge Manifest',
-            detail: 'Costs 1 Intel. Better supply gain and smoother relations if successful.',
+            detail: 'Ink-stained hands draft fresh paperwork beneath a shuttered lamp.',
+            costs: [{ key: 'intel', amount: 1 }],
+            costHint: '1 Intel',
+            benefitHint: 'Success: +2 Supplies, standing up',
+            riskHint: 'No Intel: cargo seized',
           },
           {
             id: 'burn_ledgers',
             label: 'Burn The Ledgers',
-            detail: 'No Intel cost, but patrols tighten and reputation drops.',
+            detail: 'You torch the ledgers and let the smoke hide your wake.',
+            costHint: 'No cost',
+            benefitHint: '+1 Intel now',
+            riskHint: 'Patrol pressure up, standing down',
           },
         ],
       );
@@ -1490,19 +1587,24 @@ async function applyV2EventCard(
       break;
     }
     case 'corsair_blood_oath_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Redwake captains offer a blood oath before battle.',
         [
           {
             id: 'take_oath',
             label: 'Take The Oath',
-            detail: 'Faster attack tempo and token gain, but rougher combat conditions.',
+            detail: 'Corsair captains carve your name into the oath board before dawn.',
+            benefitHint: '+1 Token, faster tempo',
+            riskHint: 'Armed resistance up',
           },
           {
             id: 'decline_oath',
             label: 'Keep Distance',
-            detail: 'Safer route and modest supplies, at reputation cost.',
+            detail: 'You salute from range and keep your banner clear of the rite.',
+            costHint: 'No cost',
+            benefitHint: '+1 Supplies',
+            riskHint: 'Corsair standing down',
           },
         ],
       );
@@ -1525,19 +1627,26 @@ async function applyV2EventCard(
     }
     case 'morale_tax_choice': {
       const hasQuartermaster = crewRoles.has('quartermaster');
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Harbormasters demand passage toll for this lane.',
         [
           {
             id: 'pay_toll',
             label: 'Pay The Toll',
-            detail: 'Spend 2 Supplies to keep passage calm and preserve standing.',
+            detail: 'Coin chests change hands at the buoy while watchfires stay low.',
+            costs: [{ key: 'supplies', amount: 2 }],
+            costHint: '2 Supplies',
+            benefitHint: 'Calm route, standing up',
+            riskHint: 'If short: cargo seized',
           },
           {
             id: 'run_blockade',
             label: 'Run The Blockade',
-            detail: 'No supply cost, but risks penalties unless your crew can outfox patrols.',
+            detail: 'You dim every lantern and gamble on current and fog.',
+            costHint: 'No cost',
+            benefitHint: 'Skilled crew: +2 Intel',
+            riskHint: 'Fail: -2 Supplies, patrols up',
           },
         ],
       );
@@ -1579,19 +1688,25 @@ async function applyV2EventCard(
       break;
     }
     case 'ghost_lantern_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Lantern lights flicker through the fog. Choose stealth or challenge.',
         [
           {
             id: 'douse_lanterns',
             label: 'Douse Lanterns',
-            detail: 'Safer if you have scouting crew, otherwise supplies may be lost.',
+            detail: 'Deck lights vanish and the ship glides by starlight alone.',
+            costHint: 'No cost',
+            benefitHint: 'Scouts: +Intel, patrols down',
+            riskHint: 'No scouts: supplies loss',
           },
           {
             id: 'challenge_phantoms',
             label: 'Challenge The Phantoms',
-            detail: 'Adds ghost threats but can earn tokens.',
+            detail: 'You raise signal flares and hail the dead in open water.',
+            costHint: 'No cost',
+            benefitHint: '+1 Token',
+            riskHint: 'Ghost threats, tougher hulls',
           },
         ],
       );
@@ -1628,19 +1743,27 @@ async function applyV2EventCard(
       tone = 'warning';
       break;
     case 'imperial_tax_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Imperial clerks board for an immediate tax audit.',
         [
           {
             id: 'submit_audit',
             label: 'Submit To Audit',
-            detail: 'Spend 1 Supplies for cleaner passage and better standing.',
+            detail: 'Stamped manifests are stacked high as clerks pace your deck.',
+            costs: [{ key: 'supplies', amount: 1 }],
+            costHint: '1 Supplies',
+            benefitHint: '+1 Intel, standing up',
+            riskHint: 'If short: inspections tighten',
           },
           {
             id: 'bribe_clerks',
             label: 'Bribe The Clerks',
-            detail: 'Costs 2 Intel if available; failure triggers harsher patrol response.',
+            detail: 'A quiet purse passes from sleeve to sleeve below the registry lamp.',
+            costs: [{ key: 'intel', amount: 2 }],
+            costHint: '2 Intel',
+            benefitHint: 'If paid: +2 Supplies',
+            riskHint: 'If short: -2 Supplies, patrols up',
           },
         ],
       );
@@ -1678,19 +1801,25 @@ async function applyV2EventCard(
       break;
     }
     case 'blockade_grid_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'A mine-linked blockade closes the shortest route.',
         [
           {
             id: 'cut_lane',
             label: 'Cut Through Mine Lane',
-            detail: 'Fast route with higher payoff if you have speed/scouting.',
+            detail: 'Your helm points straight through the glittering mine corridor.',
+            costHint: 'No cost',
+            benefitHint: 'Speed/scout: -1 ship, +1 Intel',
+            riskHint: 'Else: -2 Supplies, reinforcements',
           },
           {
             id: 'detour_route',
             label: 'Take The Detour',
-            detail: 'Safer but longer engagement profile.',
+            detail: 'You hug the outer shoals where the current runs broad and cold.',
+            costHint: 'No cost',
+            benefitHint: '+1 Supplies',
+            riskHint: 'Slower approach',
           },
         ],
       );
@@ -1724,19 +1853,25 @@ async function applyV2EventCard(
     }
     case 'relic_or_risk_choice': {
       const hasScoutCrew = crewRoles.has('lookout') || crewRoles.has('navigator');
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'A relic cache lies inland. Decide whether to commit a landing party.',
         [
           {
             id: 'land_party',
             label: 'Commit Landing Party',
-            detail: 'Potential big gain. Failure risks supply losses and an angrier sea lane.',
+            detail: 'Boats drop into surf as drums echo from the tree line.',
+            costHint: 'No cost',
+            benefitHint: 'Success: +2 Supplies, +2 Intel',
+            riskHint: 'Fail: supply loss, patrols up',
           },
           {
             id: 'shadow_market',
             label: 'Sell Coordinates',
-            detail: 'Take immediate Intel/Tokens but leave treasure behind.',
+            detail: 'A broker takes your chart copy and vanishes before sunrise.',
+            costHint: 'No cost',
+            benefitHint: '+2 Intel, +1 Token',
+            riskHint: 'No relic haul',
           },
         ],
       );
@@ -1768,19 +1903,26 @@ async function applyV2EventCard(
       break;
     }
     case 'jungle_relic_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'A jungle shrine is exposed by tidebreak.',
         [
           {
             id: 'inland_raid',
             label: 'Launch Inland Raid',
-            detail: 'Potentially large gain if your crew can secure the beachhead.',
+            detail: 'Raid boats push upriver toward the shrine before the tide turns.',
+            costHint: 'No cost',
+            benefitHint: 'Success: +1 Token, +1 Intel',
+            riskHint: 'Fail: -2 Supplies, patrols up',
           },
           {
             id: 'hire_guides',
             label: 'Hire Local Guides',
-            detail: 'Costs 1 Supplies but improves intel and diplomatic outcomes.',
+            detail: 'Village pilots arrive with reed maps and quiet warnings.',
+            costs: [{ key: 'supplies', amount: 1 }],
+            costHint: '1 Supplies',
+            benefitHint: '+2 Intel, standing up',
+            riskHint: 'If short: deal fails',
           },
         ],
       );
@@ -1824,19 +1966,25 @@ async function applyV2EventCard(
       tone = 'mystic';
       break;
     case 'abyss_pressure_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Depth gauges spike. Choose a route through abyssal pressure fronts.',
         [
           {
             id: 'skim_surface',
             label: 'Skim Surface Currents',
-            detail: 'Safer path with modest supplies gain.',
+            detail: 'You ride pale surface streams where pressure markers stay quiet.',
+            costHint: 'No cost',
+            benefitHint: '+1 Supplies',
+            riskHint: 'Speed down slightly',
           },
           {
             id: 'dive_signal',
             label: 'Dive For Signal Echo',
-            detail: 'High risk but can yield intel and tokens if the crew holds.',
+            detail: 'Ballast chains groan as the prow noses into the dark.',
+            costHint: 'No cost',
+            benefitHint: 'Success: +2 Intel, +2 Tokens',
+            riskHint: 'Fail: -2 Supplies, hazards up',
           },
         ],
       );
@@ -1868,19 +2016,26 @@ async function applyV2EventCard(
       break;
     }
     case 'mutiny_whispers_choice': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Whispers spread through the lower deck after recent infamy spikes.',
         [
           {
             id: 'share_spoils',
             label: 'Share Extra Spoils',
-            detail: 'Costs 1 Supplies, improves morale and grants token leverage.',
+            detail: 'You open the hold and let the crew claim an extra cut.',
+            costs: [{ key: 'supplies', amount: 1 }],
+            costHint: '1 Supplies',
+            benefitHint: '+1 Token, morale up',
+            riskHint: 'If short: trust down',
           },
           {
             id: 'crack_down',
             label: 'Crack Down Hard',
-            detail: 'No cost, but unstable crews may trigger losses.',
+            detail: 'The bosun reads the articles aloud and posts double watches.',
+            costHint: 'No cost',
+            benefitHint: 'Veterans: +1 Intel',
+            riskHint: 'Unsteady crew: supplies loss',
           },
         ],
       );
@@ -1917,19 +2072,26 @@ async function applyV2EventCard(
       break;
     }
     case 'manifest_inspection_followup': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Consortium auditors demand proof for those forged manifests.',
         [
           {
             id: 'submit_docs',
             label: 'Submit Clean Documents',
-            detail: 'Spend 1 Intel to keep consortium routes open.',
+            detail: 'Sealed dockets are handed over with practiced calm.',
+            costs: [{ key: 'intel', amount: 1 }],
+            costHint: '1 Intel',
+            benefitHint: 'Routes open, +1 Supplies, patrols down',
+            riskHint: 'If short: cargo seized',
           },
           {
             id: 'scuttle_evidence',
             label: 'Scuttle Evidence',
-            detail: 'No Intel cost, but patrol pressure rises.',
+            detail: 'Weighted satchels slip overboard before the skiffs arrive.',
+            costHint: 'No cost',
+            benefitHint: '+1 Intel now',
+            riskHint: 'Patrol pressure up, standing down',
           },
         ],
       );
@@ -1960,19 +2122,26 @@ async function applyV2EventCard(
       break;
     }
     case 'corsair_retribution_followup': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Redwake captains answer the burned-ledger insult with a tribute demand.',
         [
           {
             id: 'pay_blood_price',
             label: 'Pay Blood Price',
-            detail: 'Spend 2 Supplies to avoid escalation and gain limited goodwill.',
+            detail: 'Tribute casks are rolled across planks under Redwake eyes.',
+            costs: [{ key: 'supplies', amount: 2 }],
+            costHint: '2 Supplies',
+            benefitHint: 'Escalation avoided, +1 Token',
+            riskHint: 'If unpaid: retaliation',
           },
           {
             id: 'stand_and_fight',
             label: 'Stand And Fight',
-            detail: 'No supply cost, but heavier combat and volatile outcomes.',
+            detail: 'Guns are run out and flags are nailed to the mast.',
+            costHint: 'No cost',
+            benefitHint: 'Disciplined crew: respect',
+            riskHint: 'Combat pressure up',
           },
         ],
       );
@@ -2005,19 +2174,26 @@ async function applyV2EventCard(
       break;
     }
     case 'phantom_tithe_followup': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'The dead return for unpaid passage. They demand a spectral tithe.',
         [
           {
             id: 'offer_tokens',
             label: 'Offer Reputation Tokens',
-            detail: 'Spend 1 Token to avoid a direct haunting strike.',
+            detail: 'You cast marked coins into the wake and wait for silence.',
+            costs: [{ key: 'reputationTokens', amount: 1 }],
+            costHint: '1 Token',
+            benefitHint: 'Avoid haunting, +1 Intel',
+            riskHint: 'If short: ghost mark',
           },
           {
             id: 'deny_tithe',
             label: 'Deny The Tithe',
-            detail: 'Refuse payment. High chance of an immediate ghost event.',
+            detail: 'The helm holds steady while ghost voices fade into the mist.',
+            costHint: 'No cost',
+            benefitHint: 'Keep tokens',
+            riskHint: 'Ghost pressure high',
           },
         ],
       );
@@ -2048,19 +2224,26 @@ async function applyV2EventCard(
       break;
     }
     case 'mutiny_trial_followup': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'After the crackdown, the crew demands a final judgment at sea.',
         [
           {
             id: 'pardon_ringleader',
             label: 'Pardon Ringleader',
-            detail: 'Spend 1 Supplies to stabilize morale and gain intel.',
+            detail: 'You break the irons and call for a full-deck amnesty.',
+            costs: [{ key: 'supplies', amount: 1 }],
+            costHint: '1 Supplies',
+            benefitHint: 'Morale stable, +2 Intel',
+            riskHint: 'If short: unrest',
           },
           {
             id: 'make_example',
             label: 'Make An Example',
-            detail: 'No immediate cost, but unsteady crews risk desertion effects.',
+            detail: 'The sentence is carried out at dawn before the entire watch.',
+            costHint: 'No cost',
+            benefitHint: 'Veterans: +1 Token',
+            riskHint: 'Unsteady crew: losses',
           },
         ],
       );
@@ -2097,19 +2280,25 @@ async function applyV2EventCard(
       break;
     }
     case 'relic_hunters_followup': {
-      choice = await ui.showChoicePrompt(
+      choice = await showRunChoicePrompt(
         card.name,
         'Competing hunter ships close in on your recovered relic routes.',
         [
           {
             id: 'ambush_hunters',
             label: 'Ambush Hunter Fleet',
-            detail: 'Aggressive option with bigger upside for scouting crews.',
+            detail: 'You vanish behind reef-shadow and wait for pursuit sails.',
+            costHint: 'No cost',
+            benefitHint: 'Scouts: +Intel, +Token, -1 ship',
+            riskHint: 'Fail: -2 Supplies, patrols up',
           },
           {
             id: 'split_haul',
             label: 'Split The Haul',
-            detail: 'Lower conflict, steady supplies, smaller prestige gain.',
+            detail: 'You cut the relic share and send rivals away with a truce toast.',
+            costHint: 'No cost',
+            benefitHint: '+2 Supplies, +1 Intel',
+            riskHint: 'Lower prestige',
           },
         ],
       );
@@ -2602,6 +2791,7 @@ function openSettingsPanelFromPause(): void {
       music: Math.round(settings.musicVolume * 100),
       sfx: Math.round(settings.sfxVolume * 100),
       quality: settings.graphicsQuality,
+      uiScale: settings.accessibility.uiScale,
       textScale: settings.accessibility.textScale,
       motionIntensity: settings.accessibility.motionIntensity,
       flashIntensity: settings.accessibility.flashIntensity,
@@ -2609,7 +2799,7 @@ function openSettingsPanelFromPause(): void {
     },
     (key, value) => {
       updateRuntimeSetting(
-        key as 'master' | 'music' | 'sfx' | 'quality' | 'textScale' | 'motionIntensity' | 'flashIntensity' | 'colorblindMode',
+        key as 'master' | 'music' | 'sfx' | 'quality' | 'uiScale' | 'textScale' | 'motionIntensity' | 'flashIntensity' | 'colorblindMode',
         value,
       );
     },
@@ -2776,6 +2966,11 @@ function firePort() {
   audio.playCannon();
   audio.playMuzzleBlast();
 
+  // Neptune's Wrath charge indicator
+  if (combat.neptunesWrathActive) {
+    audio.playNeptuneCharge(combat.neptunesShotCounter);
+  }
+
   // Muzzle flash + smoke from port side
   const sideDir = new THREE.Vector3(-Math.cos(playerAngle), 0.3, Math.sin(playerAngle));
   const smokeOrigin = playerPos.clone().add(sideDir.clone().multiplyScalar(1.5));
@@ -2797,6 +2992,11 @@ function fireStarboard() {
   combat.fireBroadside(playerPos, playerAngle, 'starboard', stats.cannonDamage, playerSpeed, count);
   audio.playCannon();
   audio.playMuzzleBlast();
+
+  // Neptune's Wrath charge indicator
+  if (combat.neptunesWrathActive) {
+    audio.playNeptuneCharge(combat.neptunesShotCounter);
+  }
 
   // Muzzle flash + smoke from starboard side
   const sideDir = new THREE.Vector3(Math.cos(playerAngle), 0.3, -Math.sin(playerAngle));
@@ -3256,6 +3456,18 @@ if (codexToggleBtn) {
   });
 }
 
+let lastCodexToggleVisible: boolean | null = null;
+
+function syncCodexToggleVisibility(): void {
+  if (!codexToggleBtn) return;
+  const shouldShow = gameStarted && !screensaverActive && !editorMode && !editorPlayTestMode;
+  if (lastCodexToggleVisible === shouldShow) return;
+  lastCodexToggleVisible = shouldShow;
+  codexToggleBtn.style.display = shouldShow ? '' : 'none';
+}
+
+syncCodexToggleVisibility();
+
 const editorBtn = document.getElementById('editor-btn');
 if (editorBtn) {
   if (!ENABLE_SCENARIO_EDITOR) {
@@ -3459,6 +3671,13 @@ function beginPlayTestWave(): void {
   progression.onWaveStart();
   scoreAtWaveStart = progression.getScore();
 
+  // Hardtack Rations: green heal flash at wave start
+  if ((progression.getPlayerStats().hpRegenPerWave ?? 0) > 0) {
+    screenJuice.triggerHeal();
+    const s = progression.getPlayerStats();
+    ui.updateHealth(s.health, s.maxHealth);
+  }
+
   // Apply crew bonuses
   progression.applyCrewBonuses(crew.getCrewBonuses());
   syncUpgradesToCombat();
@@ -3467,6 +3686,7 @@ function beginPlayTestWave(): void {
   ui.showWaveAnnouncement(config.wave, config.bossName !== null);
   waveAnnouncePending = true;
   waveAnnounceTimer = 1.5;
+  warDrumsTimer = 0; // Reset war drums timer at wave start
 
   // Weather transition
   weather.transitionTo(config.weather, config.wave === 1 ? 1 : 10);
@@ -3768,9 +3988,17 @@ async function beginWave() {
     progression.onWaveStart();
     scoreAtWaveStart = progression.getScore();
 
+    // Hardtack Rations: green heal flash at wave start
+    if ((progression.getPlayerStats().hpRegenPerWave ?? 0) > 0) {
+      screenJuice.triggerHeal();
+      const s = progression.getPlayerStats();
+      ui.updateHealth(s.health, s.maxHealth);
+    }
+
     // Apply crew bonuses to stats for this wave
     progression.applyCrewBonuses(crew.getCrewBonuses());
     syncUpgradesToCombat();
+    warDrumsTimer = 0; // Reset war drums timer at wave start
     const currentNode = mapNodes.getCurrentNode();
     const nodeRegion = currentNode ? v2Content.getRegion(currentNode.regionId) : null;
     if (nodeRegion) unlockRegionCodex(nodeRegion.id);
@@ -3949,6 +4177,11 @@ async function onWaveComplete() {
 
   // Rebuild player ship visual if tiers changed
   rebuildPlayerShip();
+
+  // Apply Davy's Pact aura if active
+  if (progression.getPlayerStats().davyJonesPact) {
+    DavysPactAura.apply(playerGroup, true);
+  }
 
   // Sync upgrade stats to combat system
   syncUpgradesToCombat();
@@ -4720,10 +4953,14 @@ function updateMerchants(dt: number) {
     const dz = playerPos.z - m.pos.z;
     const dist = Math.sqrt(dx * dx + dz * dz);
 
-    // Chain shot slow timer
+    // Chain shot slow timer + blue tint
     if (m.chainSlowTimer > 0) {
       m.chainSlowTimer -= dt;
       m.speed = m.baseSpeed * 0.5;
+      ChainShotTint.apply(m.mesh, true);
+      if (m.chainSlowTimer <= 0) {
+        ChainShotTint.apply(m.mesh, false);
+      }
     }
 
     // Update sail animation
@@ -4767,8 +5004,9 @@ function updateMerchants(dt: number) {
         // Damage player if in range (skip in screensaver or god mode — invincible)
         if (explResult.playerDamage > 0 && !screensaverActive && !devGodMode) {
           progression.addDamageTaken(explResult.playerDamage);
-          const dead = progression.takeDamage(explResult.playerDamage);
-          ui.updateHealth(stats.health, stats.maxHealth);
+          const result = progression.takeDamage(explResult.playerDamage);
+          const dead = handleDamageResult(result);
+          if (result === 'damaged') ui.updateHealth(stats.health, stats.maxHealth);
           if (dead && !gameOverFired) {
             gameOverFired = true;
             onGameOver();
@@ -4957,6 +5195,11 @@ function triggerCapture(m: MerchantV1, _index: number) {
   ui.updateScoreAnimated(progression.getScore());
   ui.showCapture(`+${reward} Gold!`, combo);
   goldBurst.emit(m.pos, 30 + combo * 8);
+  // Boarding Party: extra gold burst proportional to bonus
+  const boardingBonus = progression.getPlayerStats().boardingPartyBonus ?? 0;
+  if (boardingBonus > 0) {
+    goldBurst.emit(m.pos, Math.round(15 * boardingBonus));
+  }
   waterSplash.emit(m.pos, 20);
   triggerScreenShake(0.4 + combo * 0.12);
   juiceScale = 1.18;
@@ -5014,6 +5257,30 @@ function triggerCapture(m: MerchantV1, _index: number) {
     progression.getShipsRemaining(),
     progression.getShipsTotal(),
   );
+}
+
+// ===================================================================
+//  Damage result VFX/SFX helper
+// ===================================================================
+
+import type { DamageResult } from './Types';
+
+function handleDamageResult(result: DamageResult): boolean {
+  if (result === 'dodged') {
+    audio.playDodge();
+    screenJuice.triggerDodge();
+    return false;
+  }
+  if (result === 'phoenix') {
+    phoenixBurst.emit(playerPos, 40);
+    audio.playPhoenixRevive();
+    screenJuice.triggerPhoenix();
+    triggerScreenShake(0.5);
+    const stats = progression.getPlayerStats();
+    ui.updateHealth(stats.health, stats.maxHealth);
+    return false;
+  }
+  return result === 'dead';
 }
 
 // ===================================================================
@@ -5084,6 +5351,7 @@ function updateCombat(dt: number) {
     // Chain shot effect
     if (progression.getPlayerStats().chainShotActive) {
       m.chainSlowTimer = 3;
+      audio.playChainHit();
     }
 
     // Effects at hit point
@@ -5114,21 +5382,23 @@ function updateCombat(dt: number) {
       if (!devGodMode) {
         const stats = progression.getPlayerStats();
         progression.addDamageTaken(playerHit.damage);
-        const dead = progression.takeDamage(playerHit.damage);
+        const result = progression.takeDamage(playerHit.damage);
+        const dead = handleDamageResult(result);
 
-        // Screen juice: damage flash + direction indicator
-        const hitDx = playerHit.hitPos.x - playerPos.x;
-        const hitDz = playerHit.hitPos.z - playerPos.z;
-        const hitAngle = Math.atan2(hitDx, hitDz) - playerAngle;
-        const normHitAngle = normalizeAngle(hitAngle);
-        let dir: 'front' | 'back' | 'left' | 'right' = 'front';
-        if (Math.abs(normHitAngle) < Math.PI / 4) dir = 'front';
-        else if (Math.abs(normHitAngle) > Math.PI * 3 / 4) dir = 'back';
-        else if (normHitAngle > 0) dir = 'left';
-        else dir = 'right';
-        screenJuice.triggerDamage(dir);
-
-        ui.updateHealth(stats.health, stats.maxHealth);
+        if (result === 'damaged') {
+          // Screen juice: damage flash + direction indicator
+          const hitDx = playerHit.hitPos.x - playerPos.x;
+          const hitDz = playerHit.hitPos.z - playerPos.z;
+          const hitAngle = Math.atan2(hitDx, hitDz) - playerAngle;
+          const normHitAngle = normalizeAngle(hitAngle);
+          let dir: 'front' | 'back' | 'left' | 'right' = 'front';
+          if (Math.abs(normHitAngle) < Math.PI / 4) dir = 'front';
+          else if (Math.abs(normHitAngle) > Math.PI * 3 / 4) dir = 'back';
+          else if (normHitAngle > 0) dir = 'left';
+          else dir = 'right';
+          screenJuice.triggerDamage(dir);
+          ui.updateHealth(stats.health, stats.maxHealth);
+        }
 
         if (dead && !gameOverFired) {
           gameOverFired = true;
@@ -5229,9 +5499,12 @@ function updateWorld(dt: number) {
   }
   if (collision.reefDamage > 0 && !devGodMode) {
     progression.addDamageTaken(collision.reefDamage);
-    const dead = progression.takeDamage(collision.reefDamage);
-    const stats = progression.getPlayerStats();
-    ui.updateHealth(stats.health, stats.maxHealth);
+    const result = progression.takeDamage(collision.reefDamage);
+    const dead = handleDamageResult(result);
+    if (result === 'damaged') {
+      const stats = progression.getPlayerStats();
+      ui.updateHealth(stats.health, stats.maxHealth);
+    }
     if (dead && !gameOverFired) {
       gameOverFired = true;
       onGameOver();
@@ -5341,10 +5614,13 @@ function updateEvents(dt: number) {
   // Apply event damage to player
   if (result.damageToPlayer > 0 && !devGodMode) {
     progression.addDamageTaken(result.damageToPlayer);
-    const dead = progression.takeDamage(result.damageToPlayer);
-    const stats = progression.getPlayerStats();
-    ui.updateHealth(stats.health, stats.maxHealth);
-    triggerScreenShake(0.3);
+    const dmgResult = progression.takeDamage(result.damageToPlayer);
+    const dead = handleDamageResult(dmgResult);
+    if (dmgResult === 'damaged') {
+      const stats = progression.getPlayerStats();
+      ui.updateHealth(stats.health, stats.maxHealth);
+      triggerScreenShake(0.3);
+    }
     if (dead && !gameOverFired) {
       gameOverFired = true;
       onGameOver();
@@ -5387,9 +5663,12 @@ function updateEvents(dt: number) {
       const serpentDmg = seaSerpentEffect.update(dt, time, playerPos);
       if (serpentDmg > 0 && !devGodMode) {
         progression.addDamageTaken(serpentDmg * dt);
-        const dead = progression.takeDamage(serpentDmg * dt);
-        const stats = progression.getPlayerStats();
-        ui.updateHealth(stats.health, stats.maxHealth);
+        const serpResult = progression.takeDamage(serpentDmg * dt);
+        const dead = handleDamageResult(serpResult);
+        if (serpResult === 'damaged') {
+          const stats = progression.getPlayerStats();
+          ui.updateHealth(stats.health, stats.maxHealth);
+        }
         if (dead && !gameOverFired) {
           gameOverFired = true;
           onGameOver();
@@ -5483,6 +5762,21 @@ function updateWaveLifecycle(dt: number) {
 
   if (progression.getState() === 'active') {
     waveCompleteTimer = 0;
+
+    // War Drums: periodic drum beat during combat
+    if (progression.getPlayerStats().warDrums) {
+      warDrumsTimer += dt;
+      if (warDrumsTimer >= 2) {
+        warDrumsTimer -= 2;
+        audio.playWarDrumsBeat();
+      }
+    }
+
+    // Grapeshot Split SFX: play ricochet scatter when cannonballs split
+    if (combat.grapeshotSplitCount > 0) {
+      audio.playGrapeshotSplit();
+      combat.grapeshotSplitCount = 0;
+    }
   }
 }
 
@@ -5511,6 +5805,7 @@ function animate(now: number) {
 
   const dt = rawDt * timeScale;
   time += dt;
+  syncCodexToggleVisibility();
 
   ocean.update(time, (gameStarted || screensaverActive) ? playerPos : new THREE.Vector3());
   skyMat.uniforms.uTime.value = time;
@@ -5635,6 +5930,7 @@ function animate(now: number) {
   fireShipExplosion.update(dt);
   treasureSparkle.update(dt, time);
   victoryConfetti.update(dt);
+  phoenixBurst.update(dt);
 
   // Speed lines
   if (gameStarted && !gamePaused) {

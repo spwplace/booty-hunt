@@ -1445,15 +1445,23 @@ export class SeaSerpentEffect {
 
     let damage = 0;
 
+    // Match the lemniscate formula in Events.ts (sea serpent update)
+    const period = 8; // seconds for a full figure-8 (must match Events.ts)
+    const t = time * 0.8; // base time multiplier for animation speed
+
     for (let i = 0; i < this.segments.length; i++) {
       const seg = this.segments[i];
-      const t = time * 0.8 + seg.phase;
+      const segPhase = t + seg.phase;
+      const phase = (segPhase / period) * Math.PI * 2;
 
-      // Figure-8 path: x = radius * sin(t), z = radius * sin(t) * cos(t)
-      const x = this.center.x + this.radius * Math.sin(t);
-      const z = this.center.z + this.radius * Math.sin(t) * Math.cos(t);
+      // Lemniscate of Bernoulli - must match Events.ts exactly
+      const sinP = Math.sin(phase);
+      const cosP = Math.cos(phase);
+      const denom = 1 + sinP * sinP;
+      const x = this.center.x + (this.radius * cosP) / denom;
+      const z = this.center.z + (this.radius * sinP * cosP) / denom;
       // Undulate vertically
-      const y = this.center.y + Math.sin(t * 2 + i * 0.5) * 1.5;
+      const y = this.center.y + Math.sin(phase * 2 + i * 0.5) * 1.5;
 
       seg.mesh.position.set(x, y, z);
 
@@ -1712,6 +1720,162 @@ export class TreasureSparkle {
 
   isActive(): boolean {
     return this.active;
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Victory confetti
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+//  Phoenix burst (fire-colored particles for phoenix sails revive)
+// ---------------------------------------------------------------------------
+
+interface PhoenixParticle {
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  life: number;
+}
+
+export class PhoenixBurst {
+  private mesh: THREE.InstancedMesh;
+  private particles: PhoenixParticle[] = [];
+  private dummy = new THREE.Object3D();
+  private static MAX = 120;
+
+  constructor(scene: THREE.Scene) {
+    const geo = new THREE.SphereGeometry(0.18, 5, 4);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff6600,
+      transparent: true,
+      opacity: 0.9,
+    });
+    this.mesh = new THREE.InstancedMesh(geo, mat, PhoenixBurst.MAX);
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.mesh.count = 0;
+    this.mesh.frustumCulled = false;
+
+    // Per-instance colors: orange/red/yellow gradient
+    const colors = new Float32Array(PhoenixBurst.MAX * 3);
+    const fireColors = [
+      new THREE.Color(0xff4400), // red-orange
+      new THREE.Color(0xff8800), // orange
+      new THREE.Color(0xffcc00), // yellow
+      new THREE.Color(0xff6600), // deep orange
+    ];
+    for (let i = 0; i < PhoenixBurst.MAX; i++) {
+      const c = fireColors[i % fireColors.length];
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    this.mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
+
+    scene.add(this.mesh);
+  }
+
+  emit(origin: THREE.Vector3, count = 40) {
+    for (let i = 0; i < count; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.random() * Math.PI * 0.6; // bias upward
+      const speed = 6 + Math.random() * 8;
+      this.particles.push({
+        pos: origin.clone(),
+        vel: new THREE.Vector3(
+          Math.sin(phi) * Math.cos(theta) * speed,
+          Math.cos(phi) * speed + 3, // upward bias
+          Math.sin(phi) * Math.sin(theta) * speed,
+        ),
+        life: 0.5 + Math.random() * 0.3,
+      });
+    }
+  }
+
+  update(dt: number) {
+    let alive = 0;
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.vel.y -= 10 * dt; // gravity
+      p.pos.addScaledVector(p.vel, dt);
+      p.life -= dt;
+      if (p.life <= 0) {
+        this.particles.splice(i, 1);
+        continue;
+      }
+      const t = p.life / 0.8; // normalized lifetime
+      this.dummy.position.copy(p.pos);
+      this.dummy.scale.setScalar(Math.min(1, t * 2));
+      this.dummy.updateMatrix();
+      if (alive < PhoenixBurst.MAX) {
+        this.mesh.setMatrixAt(alive, this.dummy.matrix);
+        alive++;
+      }
+    }
+    this.mesh.count = alive;
+    if (alive > 0) this.mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Chain shot blue tint (static utility)
+// ---------------------------------------------------------------------------
+
+export class ChainShotTint {
+  static apply(shipMesh: THREE.Group, active: boolean): void {
+    shipMesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material) {
+        const mat = child.material;
+        if (mat instanceof THREE.ShaderMaterial) return;
+
+        if (mat instanceof THREE.MeshToonMaterial) {
+          if (active) {
+            // Store original color if not stored
+            if (!child.userData._origColor) {
+              child.userData._origColor = mat.color.getHex();
+              child.userData._origEmissive = mat.emissive.getHex();
+            }
+            // Lerp toward blue tint
+            mat.color.lerp(new THREE.Color(0x4488ff), 0.4);
+            mat.emissive.set(0x224488);
+            mat.emissiveIntensity = 0.3;
+          } else if (child.userData._origColor != null) {
+            // Restore original
+            mat.color.setHex(child.userData._origColor);
+            mat.emissive.setHex(child.userData._origEmissive);
+            mat.emissiveIntensity = 0;
+            delete child.userData._origColor;
+            delete child.userData._origEmissive;
+          }
+          mat.needsUpdate = true;
+        }
+      }
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Davy's Pact aura (dark purple emissive on player ship)
+// ---------------------------------------------------------------------------
+
+export class DavysPactAura {
+  static apply(shipMesh: THREE.Group, active: boolean): void {
+    shipMesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material) {
+        const mat = child.material;
+        if (mat instanceof THREE.ShaderMaterial) return;
+
+        if (mat instanceof THREE.MeshToonMaterial) {
+          if (active) {
+            mat.emissive.set(0x330066);
+            mat.emissiveIntensity = 0.25;
+          } else {
+            mat.emissive.set(0x000000);
+            mat.emissiveIntensity = 0;
+          }
+          mat.needsUpdate = true;
+        }
+      }
+    });
   }
 }
 

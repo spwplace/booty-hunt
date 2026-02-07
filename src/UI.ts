@@ -41,6 +41,24 @@ export interface ChoicePromptOption {
   id: string;
   label: string;
   detail: string;
+  costs?: Array<{ key: ChoiceResourceKey; amount: number }>;
+  costHint?: string;
+  benefitHint?: string;
+  riskHint?: string;
+}
+
+export interface ChoicePromptResourceState {
+  supplies: number;
+  intel: number;
+  reputationTokens: number;
+}
+
+type ChoiceResourceKey = keyof ChoicePromptResourceState;
+
+interface ChoicePromptCost {
+  key: ChoiceResourceKey;
+  label: string;
+  amount: number;
 }
 
 export class UI {
@@ -883,7 +901,9 @@ export class UI {
     // Player triangle (gold, rotated)
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(playerAngle);
+    // Add PI to align canvas rotation with 3D world: ship points +Z when angle=0,
+    // but canvas triangle points "up" (negative Y) when rotation=0
+    ctx.rotate(playerAngle + Math.PI);
     ctx.fillStyle = '#ffd700';
     ctx.beginPath();
     ctx.moveTo(0, -6 * mapScale);
@@ -964,101 +984,44 @@ export class UI {
     const marketTitle = options?.marketTitle?.trim() || 'Harbor Market';
     const marketNotes = options?.marketNotes ?? [];
     const marketNotesHtml = marketNotes.length > 0
-      ? `
-          <div style="
-            margin:0 0 10px 0; padding:8px 10px;
-            border:1px solid rgba(255,215,0,0.18); border-radius:6px;
-            background:rgba(255,215,0,0.06); color:#e8d5a3;
-            font-size:12px; line-height:1.35;
-          ">
-            ${marketNotes.map(note => `<div>${note}</div>`).join('')}
-          </div>
-        `
+      ? `<div class="port-market-notes">${marketNotes.map(note => `<div>${note}</div>`).join('')}</div>`
       : '';
 
     this.portOverlay.innerHTML = `
-      <div style="
-        display:flex; flex-direction:column; align-items:center; justify-content:center;
-        width:100%; height:100%; padding:20px; box-sizing:border-box;
-      ">
-        <h1 style="
-          font-size:36px; color:#ffd700; text-shadow:0 0 12px rgba(255,215,0,0.5);
-          margin-bottom:20px; letter-spacing:3px;
-        ">PORT</h1>
+      <div class="port-container">
+        <h1 class="port-title">PORT</h1>
 
-        <div style="
-          display:flex; gap:24px; width:100%; max-width:800px;
-          flex:1; min-height:0; margin-bottom:16px;
-        ">
+        <div class="port-main-layout">
           <!-- Shop Panel (Left) -->
-          <div style="
-            flex:1; background:rgba(0,0,0,0.6); border:1px solid rgba(255,215,0,0.3);
-            border-radius:8px; padding:14px; display:flex; flex-direction:column;
-          ">
-            <h2 style="color:#ffd700;font-size:18px;margin:0 0 10px 0;text-align:center;">Shop</h2>
-            <div style="
-              color:rgba(255,235,180,0.92); font-size:12px; letter-spacing:0.04em;
-              text-transform:uppercase; margin-bottom:8px; text-align:center;
-            ">${marketTitle}</div>
+          <div class="port-panel port-shop-panel">
+            <h2 class="port-panel-title">Shop</h2>
+            <div style="color:rgba(255,235,180,0.92); font-size:12px; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:8px; text-align:center;">${marketTitle}</div>
             ${marketNotesHtml}
-            <div id="port-shop-list" style="
-              flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px;
-            "></div>
+            <div id="port-shop-list"></div>
           </div>
 
           <!-- Repair Panel (Right) -->
-          <div style="
-            width:260px; background:rgba(0,0,0,0.6); border:1px solid rgba(255,215,0,0.3);
-            border-radius:8px; padding:14px; display:flex; flex-direction:column; align-items:center;
-          ">
-            <h2 style="color:#ffd700;font-size:18px;margin:0 0 12px 0;">Repair</h2>
+          <div class="port-panel port-repair-panel">
+            <h2 class="port-panel-title">Repair</h2>
 
             <!-- HP bar -->
-            <div style="
-              width:100%; height:18px; background:rgba(0,0,0,0.5);
-              border:1px solid rgba(255,255,255,0.2); border-radius:4px;
-              overflow:hidden; margin-bottom:6px;
-            ">
-              <div id="port-hp-fill" style="
-                width:${hpPct}%; height:100%;
-                background:${hpPct > 60 ? '#4caf50' : hpPct > 30 ? '#ffeb3b' : '#f44336'};
-                transition: width 0.3s ease;
-              "></div>
+            <div style="width:100%; height:18px; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.2); border-radius:4px; overflow:hidden; margin-bottom:6px;">
+              <div id="port-hp-fill" style="width:${hpPct}%; height:100%; background:${hpPct > 60 ? '#4caf50' : hpPct > 30 ? '#ffeb3b' : '#f44336'}; transition: width 0.3s ease;"></div>
             </div>
             <div id="port-hp-text" style="color:#ccc;font-size:13px;margin-bottom:14px;">
               ${currentHp} / ${maxHp} HP
             </div>
 
-            <button id="port-repair-btn" style="
-              width:100%; padding:10px; margin-bottom:8px;
-              background:rgba(76,175,80,0.3); border:1px solid #4caf50;
-              color:white; font-size:14px; border-radius:4px; cursor:pointer;
-            ">Repair 10 HP (${repairCost}g)</button>
+            <button id="port-repair-btn" style="width:100%; padding:10px; margin-bottom:8px; background:rgba(76,175,80,0.3); border:1px solid #4caf50; color:white; font-size:14px; border-radius:4px; cursor:pointer;">Repair 10 HP (${repairCost}g)</button>
 
-            <button id="port-full-repair-btn" style="
-              width:100%; padding:10px;
-              background:rgba(33,150,243,0.3); border:1px solid #2196f3;
-              color:white; font-size:14px; border-radius:4px; cursor:pointer;
-            ">Full Repair (${fullRepairCost}g)</button>
+            <button id="port-full-repair-btn" style="width:100%; padding:10px; background:rgba(33,150,243,0.3); border:1px solid #2196f3; color:white; font-size:14px; border-radius:4px; cursor:pointer;">Full Repair (${fullRepairCost}g)</button>
           </div>
         </div>
 
         <!-- Bottom bar -->
-        <div style="
-          display:flex; align-items:center; justify-content:space-between;
-          width:100%; max-width:800px;
-        ">
-          <div id="port-gold-display" style="
-            color:#ffd700; font-size:20px; font-weight:bold;
-            text-shadow:0 0 8px rgba(255,215,0,0.4);
-          ">${gold.toLocaleString()} Gold</div>
-
-          <button id="port-set-sail-btn" style="
-            padding:12px 32px; background:rgba(255,215,0,0.2);
-            border:2px solid #ffd700; color:#ffd700; font-size:18px;
-            font-weight:bold; border-radius:6px; cursor:pointer;
-            letter-spacing:2px; text-transform:uppercase;
-          ">Set Sail</button>
+        <div class="port-bottom-bar">
+          <div id="port-gold-display">${gold.toLocaleString()} Gold</div>
+          <button id="port-set-sail-btn">Set Sail</button>
         </div>
       </div>
     `;
@@ -1085,28 +1048,19 @@ export class UI {
           tierGlow = 'box-shadow: 0 0 10px rgba(255,215,0,0.3);';
         }
 
-        item.style.cssText = `
-          display:flex; align-items:center; gap:10px;
-          padding:8px 10px; background:rgba(0,0,0,0.4);
-          border:1px solid ${tierColor}; border-radius:4px;
-          cursor:pointer; transition: background 0.2s; ${tierGlow}
-        `;
+        item.className = 'port-shop-item';
+        if (upg.tier === 'rare') item.classList.add('tier-rare');
+        else if (upg.tier === 'legendary') item.classList.add('tier-legendary');
 
         item.innerHTML = `
           <div style="font-size:22px;flex-shrink:0;">${upg.icon}</div>
           <div style="flex:1;min-width:0;">
             <div style="color:white;font-size:13px;font-weight:bold;">${upg.name}</div>
-            <div style="color:#aaa;font-size:11px;">${upg.description}</div>
+            <div style="color:#aaa;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${upg.description}</div>
           </div>
           <div style="color:#ffd700;font-size:14px;font-weight:bold;flex-shrink:0;">${upg.cost}g</div>
         `;
 
-        item.addEventListener('mouseenter', () => {
-          item.style.background = 'rgba(255,215,0,0.1)';
-        });
-        item.addEventListener('mouseleave', () => {
-          item.style.background = 'rgba(0,0,0,0.4)';
-        });
         item.addEventListener('click', () => {
           onBuy(upg.id);
         });
@@ -1530,6 +1484,7 @@ export class UI {
       music: number;
       sfx: number;
       quality: string;
+      uiScale: number;
       textScale: number;
       motionIntensity: number;
       flashIntensity: number;
@@ -1548,6 +1503,7 @@ export class UI {
     const volMusic = document.getElementById('vol-music') as HTMLInputElement | null;
     const volSfx = document.getElementById('vol-sfx') as HTMLInputElement | null;
     const gfxQuality = document.getElementById('gfx-quality') as HTMLSelectElement | null;
+    const uiScale = document.getElementById('acc-ui-scale') as HTMLInputElement | null;
     const textScale = document.getElementById('acc-text-scale') as HTMLInputElement | null;
     const motionIntensity = document.getElementById('acc-motion') as HTMLInputElement | null;
     const flashIntensity = document.getElementById('acc-flash') as HTMLInputElement | null;
@@ -1569,6 +1525,10 @@ export class UI {
     if (gfxQuality) {
       gfxQuality.value = currentSettings.quality;
       gfxQuality.onchange = () => onChange('quality', gfxQuality.value);
+    }
+    if (uiScale) {
+      uiScale.value = String(Math.round(currentSettings.uiScale * 100));
+      uiScale.oninput = () => onChange('uiScale', Number(uiScale.value) / 100);
     }
     if (textScale) {
       textScale.value = String(Math.round(currentSettings.textScale * 100));
@@ -1602,10 +1562,84 @@ export class UI {
     }
   }
 
+  private static choiceResourceMeta: Record<ChoiceResourceKey, { label: string; className: string }> = {
+    supplies: { label: 'Supplies', className: 'choice-resource-supplies' },
+    intel: { label: 'Intel', className: 'choice-resource-intel' },
+    reputationTokens: { label: 'Tokens', className: 'choice-resource-tokens' },
+  };
+
+  private static escapeChoiceHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  private static normalizeChoiceText(value: string): string {
+    return value.replace(/\s+/g, ' ').trim().replace(/[.;:,]$/, '');
+  }
+
+  private static parseChoiceResourceKey(raw: string): ChoiceResourceKey | null {
+    const key = raw.toLowerCase();
+    if (key.startsWith('supply') || key.startsWith('suppl')) return 'supplies';
+    if (key.startsWith('intel')) return 'intel';
+    if (key.startsWith('token')) return 'reputationTokens';
+    return null;
+  }
+
+  private static parseChoiceCostsFromText(text: string): ChoicePromptCost[] {
+    const parsed = new Map<ChoiceResourceKey, number>();
+    const matches = text.matchAll(/\b(?:spend|costs?)\s+(\d+)\s+(supplies?|intel|tokens?)\b/gi);
+    for (const match of matches) {
+      const amount = Number(match[1]);
+      const key = UI.parseChoiceResourceKey(match[2] ?? '');
+      if (!key || Number.isNaN(amount) || amount <= 0) continue;
+      parsed.set(key, Math.max(parsed.get(key) ?? 0, amount));
+    }
+    const costs: ChoicePromptCost[] = [];
+    for (const key of ['supplies', 'intel', 'reputationTokens'] as ChoiceResourceKey[]) {
+      const amount = parsed.get(key);
+      if (!amount) continue;
+      costs.push({
+        key,
+        label: UI.choiceResourceMeta[key].label,
+        amount,
+      });
+    }
+    return costs;
+  }
+
+  private static resolveChoiceCosts(option: ChoicePromptOption): ChoicePromptCost[] {
+    const parsed = new Map<ChoiceResourceKey, number>();
+    for (const cost of option.costs ?? []) {
+      if (!cost || Number.isNaN(cost.amount) || cost.amount <= 0) continue;
+      parsed.set(cost.key, Math.max(parsed.get(cost.key) ?? 0, Math.round(cost.amount)));
+    }
+    if (parsed.size === 0) {
+      for (const cost of UI.parseChoiceCostsFromText(option.costHint?.trim() ?? '')) {
+        parsed.set(cost.key, cost.amount);
+      }
+    }
+    const costs: ChoicePromptCost[] = [];
+    for (const key of ['supplies', 'intel', 'reputationTokens'] as ChoiceResourceKey[]) {
+      const amount = parsed.get(key);
+      if (!amount) continue;
+      costs.push({
+        key,
+        label: UI.choiceResourceMeta[key].label,
+        amount,
+      });
+    }
+    return costs;
+  }
+
   showChoicePrompt(
     title: string,
     detail: string,
     options: ChoicePromptOption[],
+    resources?: ChoicePromptResourceState,
   ): Promise<string> {
     if (!this.choicePanelEl) {
       this.choicePanelEl = document.getElementById('choice-panel');
@@ -1614,22 +1648,98 @@ export class UI {
       return Promise.resolve(options[0]?.id ?? '');
     }
 
+    const resourcesHtml = resources
+      ? `
+        <div class="choice-resources" aria-label="Current resources">
+          ${(['supplies', 'intel', 'reputationTokens'] as ChoiceResourceKey[])
+            .map((key) => {
+              const meta = UI.choiceResourceMeta[key];
+              return `
+                <div class="choice-resource ${meta.className}">
+                  <b>${meta.label}</b>
+                  <span>${Math.max(0, Math.round(resources[key]))}</span>
+                </div>
+              `;
+            })
+            .join('')}
+        </div>
+      `
+      : '';
+
+    const optionHtml = options
+      .map((option, idx) => {
+        const costs = UI.resolveChoiceCosts(option);
+        const costHintText = option.costHint?.trim() ?? '';
+        const hasNoCostPhrase = /\bno\s+(?:upfront\s+|immediate\s+)?(?:supplies?|intel|tokens?)\s+cost\b/i.test(costHintText)
+          || /\bno\s+cost\b/i.test(costHintText);
+        const canCoverCosts = resources
+          ? costs.every((cost) => resources[cost.key] >= cost.amount)
+          : true;
+        const affordabilityTag = costs.length > 0 && resources
+          ? `<span class="choice-state ${canCoverCosts ? 'choice-state-ready' : 'choice-state-short'}">${canCoverCosts ? 'Can Pay' : 'Shortfall'}</span>`
+          : '';
+
+        const costBadges = costHintText
+          ? hasNoCostPhrase
+            ? `<span class="choice-chip choice-chip-free">${UI.escapeChoiceHtml(UI.normalizeChoiceText(costHintText))}</span>`
+            : `<span class="choice-chip choice-chip-cost">Cost: ${UI.escapeChoiceHtml(UI.normalizeChoiceText(costHintText))}</span>`
+          : costs.length > 0
+            ? costs
+              .map((cost) => {
+                if (!resources) {
+                  return `<span class="choice-chip choice-chip-cost">Cost ${cost.amount} ${cost.label}</span>`;
+                }
+                const available = resources[cost.key];
+                if (available >= cost.amount) {
+                  return `<span class="choice-chip choice-chip-cost">Cost ${cost.amount} ${cost.label} (have ${available})</span>`;
+                }
+                return `<span class="choice-chip choice-chip-risk">Need ${cost.amount} ${cost.label} (have ${available})</span>`;
+              })
+              .join('')
+            : '';
+
+        const benefitBadgeText = option.benefitHint?.trim() ?? '';
+        const riskBadgeText = option.riskHint?.trim() ?? '';
+
+        const benefitBadge = benefitBadgeText
+          ? `<span class="choice-chip choice-chip-benefit">Upside: ${UI.escapeChoiceHtml(UI.normalizeChoiceText(benefitBadgeText))}</span>`
+          : '';
+        const riskBadge = riskBadgeText
+          ? `<span class="choice-chip choice-chip-risk">Risk: ${UI.escapeChoiceHtml(UI.normalizeChoiceText(riskBadgeText))}</span>`
+          : '';
+
+        return `
+          <button
+            type="button"
+            class="choice-option"
+            data-choice-id="${UI.escapeChoiceHtml(option.id)}"
+            data-affordability="${canCoverCosts ? 'ok' : 'short'}"
+          >
+            <span class="choice-index">${idx + 1}</span>
+            <span class="choice-copy">
+              <span class="choice-topline">
+                <strong>${UI.escapeChoiceHtml(option.label)}</strong>
+                ${affordabilityTag}
+              </span>
+              <em>${UI.escapeChoiceHtml(option.detail)}</em>
+              <span class="choice-badges">
+                ${costBadges}
+                ${benefitBadge}
+                ${riskBadge}
+              </span>
+            </span>
+          </button>
+        `;
+      })
+      .join('');
+
     this.choicePanelEl.innerHTML = `
       <div class="choice-shell">
-        <h3>${title}</h3>
-        <p>${detail}</p>
+        <h3>${UI.escapeChoiceHtml(title)}</h3>
+        <p>${UI.escapeChoiceHtml(detail)}</p>
+        ${resourcesHtml}
         <div class="choice-options">
-          ${options
-      .map((option, idx) => `
-              <button type="button" class="choice-option" data-choice-id="${option.id}">
-                <span class="choice-index">${idx + 1}</span>
-                <span class="choice-copy">
-                  <strong>${option.label}</strong>
-                  <em>${option.detail}</em>
-                </span>
-              </button>
-            `)
-      .join('')}
+          ${optionHtml}
         </div>
       </div>
     `;

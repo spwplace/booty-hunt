@@ -1913,6 +1913,293 @@ class Audio {
   }
 
   // =========================================================================
+  //  SFX: Chain Shot Hit (metallic clang)
+  // =========================================================================
+
+  /**
+   * Metallic clang: triangle wave 600→200Hz pitch drop + short noise burst
+   * through bandpass. ~0.15s.
+   */
+  playChainHit(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const chainGain = ctx.createGain();
+    chainGain.gain.value = 0.4;
+    chainGain.connect(this.sfxGain);
+
+    // Triangle wave pitch drop 600→200Hz
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(200, now + 0.12);
+
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(0.7, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    osc.connect(oscGain);
+    oscGain.connect(chainGain);
+    osc.start(now);
+    osc.stop(now + 0.16);
+
+    // Short noise burst through bandpass for metallic texture
+    const noiseBuf = this.createNoiseBuffer(0.06);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 2500;
+    bp.Q.value = 3;
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.5, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+
+    noise.connect(bp);
+    bp.connect(noiseGain);
+    noiseGain.connect(chainGain);
+    noise.start(now);
+    noise.stop(now + 0.07);
+  }
+
+  // =========================================================================
+  //  SFX: Dodge (ethereal whoosh)
+  // =========================================================================
+
+  /**
+   * Quick ethereal whoosh: filtered white noise sweep (high→low)
+   * + sine 1200Hz blip. ~0.12s.
+   */
+  playDodge(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const dodgeGain = ctx.createGain();
+    dodgeGain.gain.value = 0.35;
+    dodgeGain.connect(this.sfxGain);
+
+    // Noise sweep high→low
+    const noiseBuf = this.createNoiseBuffer(0.12);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1.5;
+    bp.frequency.setValueAtTime(4000, now);
+    bp.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.6, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    noise.connect(bp);
+    bp.connect(noiseGain);
+    noiseGain.connect(dodgeGain);
+    noise.start(now);
+    noise.stop(now + 0.13);
+
+    // High sine blip
+    const blip = ctx.createOscillator();
+    blip.type = 'sine';
+    blip.frequency.value = 1200;
+
+    const blipGain = ctx.createGain();
+    blipGain.gain.setValueAtTime(0.4, now);
+    blipGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    blip.connect(blipGain);
+    blipGain.connect(dodgeGain);
+    blip.start(now);
+    blip.stop(now + 0.09);
+  }
+
+  // =========================================================================
+  //  SFX: Phoenix Revive (rising triumphant chord)
+  // =========================================================================
+
+  /**
+   * Rising triumphant chord: C6→E6→G6 triangle arpeggio + shimmer noise. ~0.5s.
+   */
+  playPhoenixRevive(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const phoenixGain = ctx.createGain();
+    phoenixGain.gain.value = 0.4;
+    phoenixGain.connect(this.sfxGain);
+
+    // Rising arpeggio: C6, E6, G6
+    const notes = [1046.50, 1318.51, 1567.98];
+    const spacing = 0.12;
+    for (let i = 0; i < notes.length; i++) {
+      const t = now + i * spacing;
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = notes[i];
+
+      const noteGain = ctx.createGain();
+      noteGain.gain.setValueAtTime(0, t);
+      noteGain.gain.linearRampToValueAtTime(0.7, t + 0.01);
+      noteGain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+
+      osc.connect(noteGain);
+      noteGain.connect(phoenixGain);
+      osc.start(t);
+      osc.stop(t + 0.36);
+    }
+
+    // Shimmer noise layer
+    const noiseBuf = this.createNoiseBuffer(0.5);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    const hpf = ctx.createBiquadFilter();
+    hpf.type = 'highpass';
+    hpf.frequency.value = 3000;
+
+    const shimmerGain = ctx.createGain();
+    shimmerGain.gain.setValueAtTime(0.001, now);
+    shimmerGain.gain.linearRampToValueAtTime(0.15, now + 0.15);
+    shimmerGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+    noise.connect(hpf);
+    hpf.connect(shimmerGain);
+    shimmerGain.connect(phoenixGain);
+    noise.start(now);
+    noise.stop(now + 0.51);
+  }
+
+  // =========================================================================
+  //  SFX: War Drums Beat
+  // =========================================================================
+
+  /**
+   * Deep drum: sine 60Hz + noise transient, short decay. ~0.3s.
+   */
+  playWarDrumsBeat(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const drumGain = ctx.createGain();
+    drumGain.gain.value = 0.3;
+    drumGain.connect(this.sfxGain);
+
+    // Deep sine body
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(60, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.25);
+
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(0.8, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+    osc.connect(oscGain);
+    oscGain.connect(drumGain);
+    osc.start(now);
+    osc.stop(now + 0.31);
+
+    // Noise transient for attack
+    const noiseBuf = this.createNoiseBuffer(0.04);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    const lpf = ctx.createBiquadFilter();
+    lpf.type = 'lowpass';
+    lpf.frequency.value = 300;
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.6, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+
+    noise.connect(lpf);
+    lpf.connect(noiseGain);
+    noiseGain.connect(drumGain);
+    noise.start(now);
+    noise.stop(now + 0.05);
+  }
+
+  // =========================================================================
+  //  SFX: Grapeshot Split (ricochet scatter)
+  // =========================================================================
+
+  /**
+   * Ricochet scatter: 3 rapid noise bursts at 0.04s intervals,
+   * descending pitch. ~0.15s.
+   */
+  playGrapeshotSplit(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const splitGain = ctx.createGain();
+    splitGain.gain.value = 0.3;
+    splitGain.connect(this.sfxGain);
+
+    const freqs = [3500, 2500, 1500];
+    for (let i = 0; i < 3; i++) {
+      const t = now + i * 0.04;
+
+      const noiseBuf = this.createNoiseBuffer(0.035);
+      const noise = ctx.createBufferSource();
+      noise.buffer = noiseBuf;
+
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = freqs[i];
+      bp.Q.value = 4;
+
+      const burstGain = ctx.createGain();
+      burstGain.gain.setValueAtTime(0.7 - i * 0.15, t);
+      burstGain.gain.exponentialRampToValueAtTime(0.001, t + 0.035);
+
+      noise.connect(bp);
+      bp.connect(burstGain);
+      burstGain.connect(splitGain);
+      noise.start(t);
+      noise.stop(t + 0.04);
+    }
+  }
+
+  // =========================================================================
+  //  SFX: Neptune's Charge (progressive hum)
+  // =========================================================================
+
+  /**
+   * Progressive hum: sine wave at 200+(level×150)Hz, gain scales with level.
+   * level 0-4 (0=first shot, 4=about to AoE). ~0.08s.
+   */
+  playNeptuneCharge(level: number): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const clampedLevel = Math.max(0, Math.min(4, level));
+    const freq = 200 + clampedLevel * 150;
+    const vol = 0.1 + clampedLevel * 0.08;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+
+    const chargeGain = ctx.createGain();
+    chargeGain.gain.setValueAtTime(vol, now);
+    chargeGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    osc.connect(chargeGain);
+    chargeGain.connect(this.sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.09);
+  }
+
+  // =========================================================================
   //  MUSIC MODE: Boss Mode
   // =========================================================================
 

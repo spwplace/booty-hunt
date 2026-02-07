@@ -332,9 +332,12 @@ export interface RunHistoryEntry {
   timePlayed: number;
 }
 
+export type DamageResult = 'damaged' | 'dodged' | 'phoenix' | 'dead' | 'already_dead';
+
 export type ColorblindMode = 'off' | 'protanopia' | 'deuteranopia' | 'tritanopia';
 
 export interface AccessibilitySettings {
+  uiScale: number;
   textScale: number;
   motionIntensity: number;
   flashIntensity: number;
@@ -406,6 +409,7 @@ export interface SaveDataV1 {
   sfxVolume: number;
   graphicsQuality: 'low' | 'medium' | 'high';
   // Accessibility
+  uiScale: number;
   textScale: number;
   motionIntensity: number;
   flashIntensity: number;

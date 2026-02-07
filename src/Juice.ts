@@ -234,6 +234,105 @@ class ComboFlash {
 }
 
 // ---------------------------------------------------------------------------
+// 6. DodgeFlash (cyan/white)
+// ---------------------------------------------------------------------------
+class DodgeFlash {
+  private el: HTMLDivElement;
+  private timer = 0;
+  private static readonly DURATION = 0.06;
+  private static readonly PEAK_OPACITY = 0.35;
+
+  constructor() {
+    this.el = makeOverlay('dodge-flash');
+    this.el.style.backgroundColor = 'rgba(0,220,255,0.5)';
+  }
+
+  trigger(intensity = 1): void {
+    this.timer = DodgeFlash.DURATION;
+    this.el.style.opacity = String(DodgeFlash.PEAK_OPACITY * intensity);
+  }
+
+  update(dt: number): void {
+    if (this.timer > 0) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.timer = 0;
+        this.el.style.opacity = '0';
+      } else {
+        const t = this.timer / DodgeFlash.DURATION;
+        this.el.style.opacity = (t * DodgeFlash.PEAK_OPACITY).toFixed(3);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. PhoenixFlash (golden-orange)
+// ---------------------------------------------------------------------------
+class PhoenixFlash {
+  private el: HTMLDivElement;
+  private timer = 0;
+  private static readonly DURATION = 0.12;
+  private static readonly PEAK_OPACITY = 0.5;
+
+  constructor() {
+    this.el = makeOverlay('phoenix-flash');
+    this.el.style.backgroundColor = 'rgba(255,160,0,0.6)';
+  }
+
+  trigger(intensity = 1): void {
+    this.timer = PhoenixFlash.DURATION;
+    this.el.style.opacity = String(PhoenixFlash.PEAK_OPACITY * intensity);
+  }
+
+  update(dt: number): void {
+    if (this.timer > 0) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.timer = 0;
+        this.el.style.opacity = '0';
+      } else {
+        const t = this.timer / PhoenixFlash.DURATION;
+        this.el.style.opacity = (t * PhoenixFlash.PEAK_OPACITY).toFixed(3);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 8. HealFlash (green)
+// ---------------------------------------------------------------------------
+class HealFlash {
+  private el: HTMLDivElement;
+  private timer = 0;
+  private static readonly DURATION = 0.08;
+  private static readonly PEAK_OPACITY = 0.3;
+
+  constructor() {
+    this.el = makeOverlay('heal-flash');
+    this.el.style.backgroundColor = 'rgba(0,255,80,0.4)';
+  }
+
+  trigger(intensity = 1): void {
+    this.timer = HealFlash.DURATION;
+    this.el.style.opacity = String(HealFlash.PEAK_OPACITY * intensity);
+  }
+
+  update(dt: number): void {
+    if (this.timer > 0) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.timer = 0;
+        this.el.style.opacity = '0';
+      } else {
+        const t = this.timer / HealFlash.DURATION;
+        this.el.style.opacity = (t * HealFlash.PEAK_OPACITY).toFixed(3);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ScreenJuice singleton
 // ---------------------------------------------------------------------------
 class ScreenJuice {
@@ -242,6 +341,9 @@ class ScreenJuice {
   slowMotion: SlowMotion;
   damageFlash: DamageFlash;
   comboFlash: ComboFlash;
+  dodgeFlash: DodgeFlash;
+  phoenixFlash: PhoenixFlash;
+  healFlash: HealFlash;
   private flashIntensity = 1;
 
   constructor() {
@@ -250,6 +352,9 @@ class ScreenJuice {
     this.slowMotion = new SlowMotion();
     this.damageFlash = new DamageFlash();
     this.comboFlash = new ComboFlash();
+    this.dodgeFlash = new DodgeFlash();
+    this.phoenixFlash = new PhoenixFlash();
+    this.healFlash = new HealFlash();
   }
 
   /** Updates all sub-effects. dt is REAL (unscaled) delta time. Returns current timeScale. */
@@ -258,6 +363,9 @@ class ScreenJuice {
     this.hitIndicator.update(dt);
     this.damageFlash.update(dt);
     this.comboFlash.update(dt);
+    this.dodgeFlash.update(dt);
+    this.phoenixFlash.update(dt);
+    this.healFlash.update(dt);
     return this.slowMotion.update(dt);
   }
 
@@ -278,6 +386,21 @@ class ScreenJuice {
   triggerDramaticKill(): void {
     this.slowMotion.triggerDramaticKill();
     this.comboFlash.trigger(this.flashIntensity);
+  }
+
+  /** Triggers cyan dodge flash. */
+  triggerDodge(): void {
+    this.dodgeFlash.trigger(this.flashIntensity);
+  }
+
+  /** Triggers golden-orange phoenix revive flash. */
+  triggerPhoenix(): void {
+    this.phoenixFlash.trigger(this.flashIntensity);
+  }
+
+  /** Triggers green heal flash. */
+  triggerHeal(): void {
+    this.healFlash.trigger(this.flashIntensity);
   }
 
   setFlashIntensity(value: number): void {

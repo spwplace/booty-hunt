@@ -94,6 +94,7 @@ export class CombatSystem {
 
   // Grapeshot: active flag; splits player cannonballs near targets they'd miss
   grapeshotActive = false;
+  grapeshotSplitCount = 0; // incremented each frame a split occurs; main.ts reads & resets
 
   // Cooldown multiplier from upgrades (1.0 = normal, <1 = faster)
   cooldownMultiplier = 1.0;
@@ -570,6 +571,7 @@ export class CombatSystem {
           if (dist > t.hitRadius && dist < GRAPESHOT_DETECT_RADIUS) {
             // Deactivate the original cannonball
             b.active = false;
+            this.grapeshotSplitCount++;
 
             // Direction from cannonball to target
             const toTargetX = (t.pos.x - b.pos.x) / dist;

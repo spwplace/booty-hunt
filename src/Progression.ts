@@ -2,6 +2,7 @@ import type { WeatherState } from './Weather';
 import type {
   AccessibilitySettings,
   ColorblindMode,
+  DamageResult,
   ShipClass,
   CrewBonus,
   RunStats,
@@ -520,6 +521,7 @@ function createDefaultSaveV1(): SaveDataV1 {
     musicVolume: 0.7,
     sfxVolume: 1,
     graphicsQuality: 'high',
+    uiScale: 1,
     textScale: 1,
     motionIntensity: 1,
     flashIntensity: 1,
@@ -555,6 +557,7 @@ function loadSaveV1(): SaveDataV1 {
         graphicsQuality: data.graphicsQuality === 'low' || data.graphicsQuality === 'medium' || data.graphicsQuality === 'high'
           ? data.graphicsQuality
           : 'high',
+        uiScale: Number.isFinite(data.uiScale) ? Math.max(0.7, Math.min(1.5, data.uiScale as number)) : 1,
         textScale: Number.isFinite(data.textScale) ? Math.max(0.8, Math.min(1.4, data.textScale as number)) : 1,
         motionIntensity: clamp01(data.motionIntensity ?? 1),
         flashIntensity: clamp01(data.flashIntensity ?? 1),
@@ -984,6 +987,7 @@ export class ProgressionSystem {
       sfxVolume: this.metaStatsV1.sfxVolume,
       graphicsQuality: this.metaStatsV1.graphicsQuality,
       accessibility: {
+        uiScale: this.metaStatsV1.uiScale,
         textScale: this.metaStatsV1.textScale,
         motionIntensity: this.metaStatsV1.motionIntensity,
         flashIntensity: this.metaStatsV1.flashIntensity,
@@ -1008,6 +1012,9 @@ export class ProgressionSystem {
       this.metaStatsV1.graphicsQuality = patch.graphicsQuality;
     }
     if (patch.accessibility) {
+      if (patch.accessibility.uiScale != null && Number.isFinite(patch.accessibility.uiScale)) {
+        this.metaStatsV1.uiScale = Math.max(0.7, Math.min(1.5, patch.accessibility.uiScale));
+      }
       if (patch.accessibility.textScale != null && Number.isFinite(patch.accessibility.textScale)) {
         this.metaStatsV1.textScale = Math.max(0.8, Math.min(1.4, patch.accessibility.textScale));
       }
@@ -1763,12 +1770,12 @@ export class ProgressionSystem {
    * Effective damage = raw amount * armor.
    * Returns `true` if the player is now dead.
    */
-  takeDamage(amount: number): boolean {
-    if (this.state === 'game_over') return true;
+  takeDamage(amount: number): DamageResult {
+    if (this.state === 'game_over') return 'already_dead';
 
     // Ghost Sails dodge check (includes ship class dodge bonus)
     if (this.stats.ghostDodgeChance && Math.random() < this.stats.ghostDodgeChance) {
-      return false; // dodged!
+      return 'dodged';
     }
 
     const effective = amount * this.stats.armor;
@@ -1783,15 +1790,15 @@ export class ProgressionSystem {
       ) {
         this.stats.phoenixSailsUsed = true;
         this.stats.health = Math.round(this.stats.maxHealth * 0.4);
-        return false;
+        return 'phoenix';
       }
 
       this.stats.health = 0;
       this.state = 'game_over';
       this.saveHighScore();
-      return true;
+      return 'dead';
     }
-    return false;
+    return 'damaged';
   }
 
 
