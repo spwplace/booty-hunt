@@ -206,6 +206,7 @@ export class WeatherSystem {
   // Event weather overlay state
   private eventOverlayType: EventType | null = null;
   private eventOverlayBlend = 0;        // 0 = no overlay, 1 = full overlay
+  private preOverlayConfig: WeatherConfig | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -286,9 +287,17 @@ export class WeatherSystem {
 
       this.currentConfig = lerpConfig(this.txFrom, this.txTarget, t);
 
+      // Keep overlay snapshot in sync with transition base
+      if (this.preOverlayConfig) {
+        this.preOverlayConfig = cloneConfig(this.currentConfig);
+      }
+
       if (rawT >= 1) {
         this.transitioning = false;
         this.currentConfig = cloneConfig(this.txTarget);
+        if (this.preOverlayConfig) {
+          this.preOverlayConfig = cloneConfig(this.currentConfig);
+        }
       }
     }
 
@@ -333,7 +342,16 @@ export class WeatherSystem {
       }
 
       if (this.eventOverlayBlend > 0.001) {
+        // Snapshot the base config before first overlay application
+        if (!this.preOverlayConfig) {
+          this.preOverlayConfig = cloneConfig(this.currentConfig);
+        }
+        // Reset to clean base before applying overlay (prevents exponential decay)
+        this.currentConfig = cloneConfig(this.preOverlayConfig);
         this.applyEventOverlay(this.eventOverlayType, this.eventOverlayBlend);
+      } else if (this.preOverlayConfig) {
+        // Overlay fully faded out — clear snapshot
+        this.preOverlayConfig = null;
       }
     }
 

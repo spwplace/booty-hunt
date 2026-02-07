@@ -7,7 +7,7 @@ const TUTORIAL_STEPS = [
   'Press Q or E to fire cannons',
   'Sail close to damaged ships to capture them',
   'Choose an upgrade to power up',
-  'Survive 12 waves to claim victory!',
+  'Survive 5 waves to claim victory!',
 ];
 
 export class TutorialSystem {
@@ -72,7 +72,7 @@ export class TutorialSystem {
       case 3: // "Choose an upgrade to power up"
         if (conditions.upgraded) shouldAdvance = true;
         break;
-      case 4: // "Survive 12 waves..." — time-based, handled in update()
+      case 4: // "Survive 5 waves..." — time-based, handled in update()
         break;
     }
 

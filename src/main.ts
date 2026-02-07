@@ -25,6 +25,7 @@ import { EventSystem } from './Events';
 import { TutorialSystem } from './Tutorial';
 import type { MerchantV1, WaveConfigV1, EnemyType, RunStats } from './Types';
 import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS } from './Types';
+import { DevPanel } from './DevPanel';
 
 // ===================================================================
 //  Mobile detection
@@ -67,6 +68,7 @@ const skyMat = new THREE.ShaderMaterial({
     uSkyMid:     { value: new THREE.Color(0x100618) },
     uSkyHorizon: { value: new THREE.Color(0x552615) },
     uSunDir:     { value: new THREE.Vector3(0.4, 0.12, 0.3).normalize() },
+    uTime:       { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec3 vDir;
@@ -80,14 +82,23 @@ const skyMat = new THREE.ShaderMaterial({
     uniform vec3 uSkyMid;
     uniform vec3 uSkyHorizon;
     uniform vec3 uSunDir;
+    uniform float uTime;
     varying vec3 vDir;
     void main() {
       float y = normalize(vDir).y;
-      vec3 color = mix(uSkyHorizon, uSkyMid, smoothstep(-0.02, 0.25, y));
+      vec3 color = mix(uSkyHorizon, uSkyMid, smoothstep(-0.08, 0.25, y));
       color = mix(color, uSkyTop, smoothstep(0.25, 0.7, y));
       float sunDot = max(dot(normalize(vDir), normalize(uSunDir)), 0.0);
       color += vec3(1.0, 0.6, 0.2) * pow(sunDot, 32.0) * 0.6;
       color += vec3(1.0, 0.85, 0.5) * pow(sunDot, 256.0) * 1.0;
+      // Aurora glow in night mode (when sky is dark)
+      float nightness = 1.0 - smoothstep(0.0, 0.15, (uSkyTop.r + uSkyTop.g + uSkyTop.b) / 3.0);
+      float auroraBand = smoothstep(0.3, 0.45, y) * smoothstep(0.65, 0.5, y);
+      float xDir = normalize(vDir).x;
+      float auroraWave = sin(xDir * 4.0 + uTime * 0.2) * 0.5 + 0.5;
+      auroraWave *= sin(xDir * 7.0 - uTime * 0.15) * 0.3 + 0.7;
+      vec3 auroraColor = mix(vec3(0.1, 0.8, 0.4), vec3(0.2, 0.3, 0.9), auroraWave);
+      color += auroraColor * auroraBand * auroraWave * nightness * 0.15;
       gl_FragColor = vec4(color, 1.0);
     }
   `,
@@ -96,6 +107,7 @@ const skyMat = new THREE.ShaderMaterial({
 });
 
 const sky = new THREE.Mesh(skyGeo, skyMat);
+sky.renderOrder = -1;
 scene.add(sky);
 
 // ===================================================================
@@ -194,13 +206,8 @@ let portTransitionPhase: 'entering' | 'active' | 'leaving' | 'none' = 'none';
 //  Merchant ships
 // ===================================================================
 
-type Merchant = MerchantV1;
-
-const merchants: Merchant[] = [];
+const merchants: MerchantV1[] = [];
 let nextMerchantId = 0;
-const FLEE_RANGE = 22;
-const ESCAPE_RANGE = 120; // ships beyond this auto-escape (wave progress, no gold)
-const SAIL_COLORS = [0xcc2222, 0xccaa22, 0x2266cc, 0x22bb55, 0xcc6622, 0x9933aa];
 const SINK_DURATION = 4.0; // expanded for multi-stage sinking
 
 // Boss names
@@ -212,7 +219,7 @@ const PIRATE_NAMES = [
 
 // Track active wave config (V1 with enemy types + boss info)
 let activeWaveConfigV1: WaveConfigV1 | null = null;
-let currentBoss: Merchant | null = null;
+let currentBoss: MerchantV1 | null = null;
 
 function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
   const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
@@ -238,7 +245,7 @@ function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
   mesh.position.set(px, 0, pz);
   scene.add(mesh);
 
-  const m: Merchant = {
+  const m: MerchantV1 = {
     mesh,
     pos: new THREE.Vector3(px, 0, pz),
     heading,
@@ -274,6 +281,7 @@ function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
   };
 
   merchants.push(m);
+  if (lastIsNight) setShipLanterns(mesh, true);
 
   if (isBoss) {
     currentBoss = m;
@@ -306,6 +314,68 @@ let tutorialFired = false;
 let tutorialCaptured = false;
 let tutorialUpgraded = false;
 
+// Screensaver mode
+let lastIsNight = false;
+let screensaverActive = false;
+let screensaverWeatherTimer = 0;
+let screensaverWeatherIndex = 0;
+const screensaverWeathers: Array<'clear' | 'foggy' | 'stormy' | 'night'> = ['clear', 'foggy', 'night', 'stormy'];
+const screensaverShips: THREE.Group[] = [];
+
+// Screensaver wave config — base stats for demo enemies
+const screensaverWaveConfig: WaveConfigV1 = {
+  wave: 1,
+  totalShips: 4,
+  armedPercent: 0.4,
+  speedMultiplier: 1.0,
+  healthMultiplier: 1.0,
+  weather: 'clear',
+  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],
+  bossName: null,
+  bossHp: 0,
+  isPortWave: false,
+  specialEvent: null,
+};
+
+// Autopilot state machine
+type AutopilotState = 'idle' | 'seek_island' | 'seek_merchant' | 'engage';
+let autopilotState: AutopilotState = 'idle';
+let autopilotTimer = 0;
+let autopilotTarget: THREE.Vector3 | null = null;
+let autopilotTargetId = -1;
+let screensaverSpawnTimer = 0;
+
+// Dev/God mode flags
+let devGodMode = false;
+let devInstakill = false;
+
+const devPanel = new DevPanel({
+  onSetGold: (v) => { progression.devSetScore(v); ui.updateScore(v); },
+  onSetHealth: (v) => {
+    progression.devSetHealth(v);
+    const s = progression.getPlayerStats();
+    ui.updateHealth(s.health, s.maxHealth);
+  },
+  onSetMaxSpeed: (v) => progression.devSetMaxSpeed(v),
+  onSetDamage: (v) => { progression.devSetCannonDamage(v); syncUpgradesToCombat(); },
+  onSetWave: (v) => progression.devSetWave(v),
+  onToggleGodMode: (v) => { devGodMode = v; },
+  onToggleInstakill: (v) => { devInstakill = v; },
+  onSpawnEnemy: (type, isBoss) => spawnEnemy(type, isBoss),
+  onSetWeather: (state) => weather.transitionTo(state, 2),
+  getState: () => ({
+    gold: progression.getScore(),
+    health: progression.getPlayerStats().health,
+    maxHealth: progression.getPlayerStats().maxHealth,
+    maxSpeed: progression.getPlayerStats().maxSpeed,
+    damage: progression.getPlayerStats().cannonDamage,
+    wave: progression.getCurrentWave(),
+    weather: weather.getCurrentState(),
+    godMode: devGodMode,
+    instakill: devInstakill,
+  }),
+});
+
 // ===================================================================
 //  Input: keyboard
 // ===================================================================
@@ -317,7 +387,9 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
   keys[e.key.toLowerCase()] = true;
-  if (!gameStarted && e.key !== 'F5' && e.key !== 'F12') startGame();
+  if (e.key === '`') { devPanel?.toggle(); return; }
+  if (screensaverActive && e.key !== 'F5' && e.key !== 'F12') { stopScreensaver(); return; }
+  if (!gameStarted && !screensaverActive && e.key !== 'F5' && e.key !== 'F12') startGame();
 
   // Mute toggle
   if (e.key.toLowerCase() === 'm' && gameStarted) {
@@ -401,6 +473,7 @@ const joystickThumb = document.getElementById('joystick-thumb')!;
 
 function handleTouchStart(e: TouchEvent) {
   e.preventDefault();
+  if (screensaverActive) { stopScreensaver(); return; }
   if (!gameStarted) startGame();
 
   for (let i = 0; i < e.changedTouches.length; i++) {
@@ -480,7 +553,242 @@ if (isMobile) {
 //  Game start & wave flow
 // ===================================================================
 
+// ===================================================================
+//  Screensaver mode
+// ===================================================================
+
+function startScreensaver() {
+  screensaverActive = true;
+  screensaverWeatherTimer = 0;
+  screensaverWeatherIndex = 0;
+  screensaverSpawnTimer = 0;
+  ui.screensaverMode = true;
+
+  audio.init();
+
+  // Hide title
+  const title = document.getElementById('title');
+  if (title) {
+    title.style.opacity = '0';
+    title.style.pointerEvents = 'none';
+  }
+
+  // Set screensaver wave config for enemy spawning
+  activeWaveConfigV1 = screensaverWaveConfig;
+
+  // Generate world islands and feed reef data to ocean shader
+  world.generateIslands();
+  ocean.setReefPositions(world.getReefData());
+
+  // Init player at origin, sailing forward
+  playerPos.set(0, 0, 0);
+  playerAngle = 0;
+  playerSpeed = 8;
+
+  // Init camera behind player
+  camPos.set(-Math.sin(playerAngle) * 18, 14, -Math.cos(playerAngle) * 18);
+  camPos.add(playerPos);
+  camLookAt.copy(playerPos);
+
+  // Init autopilot
+  autopilotState = 'idle';
+  autopilotTimer = 3 + Math.random() * 3;
+  autopilotTarget = null;
+  autopilotTargetId = -1;
+
+  // Start with clear weather
+  weather.transitionTo('clear', 2);
+}
+
+function stopScreensaver() {
+  screensaverActive = false;
+  ui.screensaverMode = false;
+
+  // Remove all merchants from scene
+  for (const m of merchants) {
+    scene.remove(m.mesh);
+  }
+  merchants.length = 0;
+
+  // Remove old screensaverShips (backward compat)
+  for (const ship of screensaverShips) {
+    scene.remove(ship);
+  }
+  screensaverShips.length = 0;
+
+  // Reset player
+  playerPos.set(0, 0, 0);
+  playerAngle = 0;
+  playerSpeed = 0;
+
+  // Dispose world islands
+  world.dispose();
+
+  // Reset combat (clear cannonballs)
+  combat.portCooldown = 0;
+  combat.starboardCooldown = 0;
+
+  // Reset ocean position
+  ocean.update(time, new THREE.Vector3());
+
+  // Reset weather to clear
+  weather.transitionTo('clear', 2);
+
+  // Reset wave config
+  activeWaveConfigV1 = null;
+
+  // Show title again
+  const title = document.getElementById('title');
+  if (title) {
+    title.style.opacity = '1';
+    title.style.pointerEvents = '';
+  }
+}
+
+function updateAutopilot(dt: number) {
+  const turnRate = 2.2;
+  const islands = world.getIslands();
+
+  autopilotTimer -= dt;
+
+  switch (autopilotState) {
+    case 'idle': {
+      // Sail forward with gentle wander
+      playerSpeed = THREE.MathUtils.lerp(playerSpeed, 10, 1 - Math.exp(-2 * dt));
+      playerAngle += (Math.sin(time * 0.3) * 0.3) * dt;
+
+      // After timer expires, pick a target
+      if (autopilotTimer <= 0) {
+        // Try to find a merchant first
+        let nearestMerchant: MerchantV1 | null = null;
+        let nearestMDist = Infinity;
+        for (const m of merchants) {
+          if (m.state === 'sinking') continue;
+          const d = _tmpVec3A.copy(m.pos).sub(playerPos).length();
+          if (d < nearestMDist) {
+            nearestMDist = d;
+            nearestMerchant = m;
+          }
+        }
+
+        if (nearestMerchant && nearestMDist < 80) {
+          autopilotState = 'seek_merchant';
+          autopilotTarget = nearestMerchant.pos;
+          autopilotTargetId = nearestMerchant.id;
+          autopilotTimer = 30;
+        } else if (islands.length > 0) {
+          // Pick a random island to visit
+          const island = islands[Math.floor(Math.random() * islands.length)];
+          autopilotState = 'seek_island';
+          autopilotTarget = island.pos;
+          autopilotTimer = 20;
+        } else {
+          autopilotTimer = 3 + Math.random() * 3;
+        }
+      }
+      break;
+    }
+
+    case 'seek_island': {
+      if (!autopilotTarget) { autopilotState = 'idle'; autopilotTimer = 2; break; }
+
+      playerSpeed = THREE.MathUtils.lerp(playerSpeed, 10, 1 - Math.exp(-2 * dt));
+
+      const toIsland = Math.atan2(
+        autopilotTarget.x - playerPos.x,
+        autopilotTarget.z - playerPos.z,
+      );
+      const diff = normalizeAngle(toIsland - playerAngle);
+      playerAngle += Math.sign(diff) * Math.min(Math.abs(diff), turnRate * dt);
+
+      const dist = _tmpVec3A.copy(autopilotTarget).sub(playerPos).length();
+      if (dist < 35 || autopilotTimer <= 0) {
+        autopilotState = 'idle';
+        autopilotTimer = 5 + Math.random() * 3;
+      }
+      break;
+    }
+
+    case 'seek_merchant': {
+      // Check if target still exists
+      const target = merchants.find(m => m.id === autopilotTargetId && m.state !== 'sinking');
+      if (!target || autopilotTimer <= 0) {
+        autopilotState = 'idle';
+        autopilotTimer = 3 + Math.random() * 3;
+        break;
+      }
+
+      autopilotTarget = target.pos;
+      playerSpeed = THREE.MathUtils.lerp(playerSpeed, 12, 1 - Math.exp(-2 * dt));
+
+      const toTarget = Math.atan2(
+        autopilotTarget.x - playerPos.x,
+        autopilotTarget.z - playerPos.z,
+      );
+      const diff = normalizeAngle(toTarget - playerAngle);
+      playerAngle += Math.sign(diff) * Math.min(Math.abs(diff), turnRate * dt);
+
+      const dist = _tmpVec3A.copy(autopilotTarget).sub(playerPos).length();
+      if (dist < 25) {
+        autopilotState = 'engage';
+        autopilotTimer = 15;
+      }
+      break;
+    }
+
+    case 'engage': {
+      const target = merchants.find(m => m.id === autopilotTargetId && m.state !== 'sinking');
+      if (!target || autopilotTimer <= 0) {
+        autopilotState = 'idle';
+        autopilotTimer = 5 + Math.random() * 3;
+        break;
+      }
+
+      autopilotTarget = target.pos;
+      playerSpeed = THREE.MathUtils.lerp(playerSpeed, 8, 1 - Math.exp(-2 * dt));
+
+      // Circle the target
+      const toTarget = Math.atan2(
+        autopilotTarget.x - playerPos.x,
+        autopilotTarget.z - playerPos.z,
+      );
+      const dist = _tmpVec3A.copy(autopilotTarget).sub(playerPos).length();
+
+      // Orbit: steer perpendicular + slightly toward target
+      const orbitAngle = toTarget + Math.PI / 2;
+      const approachBlend = Math.max(0, (dist - 15) / 20);
+      const desiredAngle = normalizeAngle(orbitAngle) * (1 - approachBlend) + normalizeAngle(toTarget) * approachBlend;
+      const diff = normalizeAngle(desiredAngle - playerAngle);
+      playerAngle += Math.sign(diff) * Math.min(Math.abs(diff), turnRate * dt);
+
+      // Fire broadsides when target is abeam (perpendicular)
+      const relAngle = Math.abs(normalizeAngle(toTarget - playerAngle));
+      if (relAngle > Math.PI / 4 && relAngle < Math.PI * 3 / 4 && dist < 30) {
+        // Port side (target is to the left)
+        if (normalizeAngle(toTarget - playerAngle) > 0 && combat.canFirePort) {
+          firePort();
+        }
+        // Starboard side (target is to the right)
+        if (normalizeAngle(toTarget - playerAngle) < 0 && combat.canFireStarboard) {
+          fireStarboard();
+        }
+      }
+      break;
+    }
+  }
+}
+
+// Wire up screensaver button
+const screensaverBtn = document.getElementById('screensaver-btn');
+if (screensaverBtn) {
+  screensaverBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startScreensaver();
+  });
+}
+
 function startGame() {
+  if (screensaverActive) stopScreensaver();
   gameStarted = true;
   gamePaused = false;
   camPos.copy(camera.position);
@@ -536,7 +844,7 @@ function beginWave() {
   // Wave announcement
   ui.showWaveAnnouncement(config.wave);
   waveAnnouncePending = true;
-  waveAnnounceTimer = 2.5;
+  waveAnnounceTimer = 1.5;
 
   // Weather transition
   weather.transitionTo(config.weather, config.wave === 1 ? 1 : 10);
@@ -583,11 +891,14 @@ function spawnWaveFleet() {
   ui.updateWaveCounter(config.wave, config.totalShips, config.totalShips);
 }
 
+let waveCompleteInProgress = false;
 async function onWaveComplete() {
+  if (waveCompleteInProgress) return;
+  waveCompleteInProgress = true;
   gamePaused = true;
   ui.hideBossHealthBar();
 
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await new Promise(resolve => setTimeout(resolve, 1000));
 
   // Show upgrade selection
   const choices = progression.getUpgradeChoices();
@@ -628,6 +939,7 @@ async function onWaveComplete() {
   // Victory check — after final wave, show run summary
   if (progression.checkVictory()) {
     gamePaused = true;
+    waveCompleteInProgress = false;
     victoryConfetti.start();
     audio.playWaveComplete();
     const runStats = progression.getRunStats();
@@ -635,10 +947,10 @@ async function onWaveComplete() {
     return;
   }
 
-  // Port visit on port waves or every 3 waves
-  const currentWave = progression.getCurrentWave();
+  // Port visit on port waves
   const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
-  if (waveConfig.isPortWave || ((currentWave - 1) % 3 === 0 && currentWave > 1)) {
+  waveCompleteInProgress = false;
+  if (waveConfig.isPortWave) {
     enterPort();
   } else {
     beginWave();
@@ -842,6 +1154,7 @@ function restartGame() {
   // Reset progression
   progression.reset();
   gameOverFired = false;
+  waveCompleteInProgress = false;
   waveCompleteTimer = 0;
   waveAnnouncePending = false;
   waveAnnounceTimer = 0;
@@ -860,10 +1173,12 @@ function restartGame() {
   tutorialCaptured = false;
   tutorialUpgraded = false;
 
-  // Clean up event effects
+  // Clean up effects
   krakenTentacle.dispose();
   whirlpoolEffect.dispose();
   seaSerpentEffect.dispose();
+  treasureSparkle.clear();
+  victoryConfetti.stop();
 
   // Reset weather to clear
   weather.transitionTo('clear', 2);
@@ -937,6 +1252,14 @@ function updateCamera(dt: number) {
 }
 
 // ===================================================================
+//  Reusable temp vectors (avoid per-frame allocations)
+// ===================================================================
+
+const _tmpVec3A = new THREE.Vector3();
+const _tmpVec3B = new THREE.Vector3();
+const _tmpVec3C = new THREE.Vector3();
+
+// ===================================================================
 //  Ship wave-tilt helper
 // ===================================================================
 
@@ -984,7 +1307,7 @@ function updatePlayer(dt: number) {
   // Wind direction affects speed
   const weatherCfg = weather.getCurrentConfig();
   const windDir = weatherCfg.sunDirection;
-  const shipForward = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle));
+  const shipForward = _tmpVec3A.set(Math.sin(playerAngle), 0, Math.cos(playerAngle));
   const windDot = shipForward.x * windDir.x + shipForward.z * windDir.z;
   const windSpeedMod = stats.stormImmunity ? 1.0 : 1.0 + windDot * 0.15;
 
@@ -1031,8 +1354,8 @@ function updatePlayer(dt: number) {
   // Update sail animation
   updateShipSails(playerGroup, time, weatherCfg.windIntensity);
 
-  const sternWorld = new THREE.Vector3(0, 0, -2.2)
-    .applyAxisAngle(new THREE.Vector3(0, 1, 0), playerAngle)
+  const sternWorld = _tmpVec3B.set(0, 0, -2.2)
+    .applyAxisAngle(_tmpVec3C.set(0, 1, 0), playerAngle)
     .add(playerPos);
   wake.spawn(sternWorld, Math.abs(playerSpeed), dt);
 
@@ -1099,7 +1422,7 @@ function updateMerchants(dt: number) {
       } else if (m.sinkTimer < 1.5) {
         m.mesh.position.y -= dt * 0.8;
         m.mesh.rotation.z += dt * 0.3;
-        fireEffect.emit(m.pos.clone().add(new THREE.Vector3(0, 1, 0)), 3);
+        fireEffect.emit(_tmpVec3A.copy(m.pos).add(_tmpVec3B.set(0, 1, 0)), 3);
       } else if (m.sinkTimer < 2.5) {
         if (m.sinkPhase < 3) {
           m.sinkPhase = 3;
@@ -1108,7 +1431,7 @@ function updateMerchants(dt: number) {
         m.mesh.position.y -= dt * 2.5;
         m.mesh.rotation.x -= dt * 0.8;
         m.mesh.rotation.z += dt * 0.5;
-        fireEffect.emit(m.pos.clone().add(new THREE.Vector3(0, 0.5, 0)), 2);
+        fireEffect.emit(_tmpVec3A.copy(m.pos).add(_tmpVec3B.set(0, 0.5, 0)), 2);
       } else {
         m.mesh.position.y -= dt * 3.0;
         m.mesh.rotation.z += dt * 0.2;
@@ -1169,8 +1492,8 @@ function updateMerchants(dt: number) {
         screenShake.trigger(0.8);
         audio.playExplosion(m.pos, playerPos);
 
-        // Damage player if in range
-        if (explResult.playerDamage > 0) {
+        // Damage player if in range (skip in screensaver or god mode — invincible)
+        if (explResult.playerDamage > 0 && !screensaverActive && !devGodMode) {
           const dead = progression.takeDamage(explResult.playerDamage);
           ui.updateHealth(stats.health, stats.maxHealth);
           if (dead && !gameOverFired) {
@@ -1184,7 +1507,7 @@ function updateMerchants(dt: number) {
         m.sinkTimer = 0;
         m.sinkPhase = 0;
         m.speed = 0;
-        progression.onShipDestroyed();
+        if (!screensaverActive) progression.onShipDestroyed();
         continue;
       }
     }
@@ -1200,11 +1523,12 @@ function updateMerchants(dt: number) {
       audio.playExplosion(m.pos, playerPos);
       m.fireTimer = EnemyAISystem.getFireCooldown(m);
 
-      const fireDir = new THREE.Vector3(
+      const fireDir = _tmpVec3A.set(
         playerPos.x - m.pos.x, 0.3, playerPos.z - m.pos.z,
       ).normalize();
-      cannonSmoke.emit(m.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), fireDir, 8);
-      muzzleFlash.emit(m.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), fireDir);
+      const muzzlePos = _tmpVec3B.copy(m.pos).setY(m.pos.y + 0.8);
+      cannonSmoke.emit(muzzlePos, fireDir, 8);
+      muzzleFlash.emit(muzzlePos, fireDir);
     }
 
     // Apply position and wave tilt
@@ -1247,12 +1571,14 @@ function updateMerchants(dt: number) {
     if (EnemyAISystem.shouldDespawn(m, playerPos)) {
       scene.remove(m.mesh);
       merchants.splice(i, 1);
-      progression.onShipDestroyed();
-      ui.updateWaveCounter(
-        progression.getCurrentWave(),
-        progression.getShipsRemaining(),
-        progression.getShipsTotal(),
-      );
+      if (!screensaverActive) {
+        progression.onShipDestroyed();
+        ui.updateWaveCounter(
+          progression.getCurrentWave(),
+          progression.getShipsRemaining(),
+          progression.getShipsTotal(),
+        );
+      }
     }
   }
 
@@ -1298,8 +1624,22 @@ function updateMerchants(dt: number) {
   }
 }
 
-function triggerCapture(m: Merchant, _index: number) {
+function triggerCapture(m: MerchantV1, _index: number) {
   if (m.state === 'sinking') return; // prevent double-capture
+
+  // In screensaver mode, just sink the ship with visual effects — skip progression/UI
+  if (screensaverActive) {
+    goldBurst.emit(m.pos, 20);
+    waterSplash.emit(m.pos, 20);
+    screenShake.trigger(0.3);
+    audio.playSplash();
+    floatingDebris.emit(m.pos);
+    m.state = 'sinking';
+    m.sinkTimer = 0;
+    m.sinkPhase = 0;
+    m.speed = 0;
+    return;
+  }
 
   const now = performance.now() / 1000;
   combo = (now - lastCaptureTime < 5) ? combo + 1 : 1;
@@ -1387,9 +1727,11 @@ function updateCombat(dt: number) {
   combat.update(dt);
 
   // Build target list for player cannonballs hitting merchants
-  const targets = merchants
-    .filter(m => m.state !== 'sinking')
-    .map(m => ({ pos: m.pos, hitRadius: m.hitRadius, id: m.id }));
+  const targets: Array<{pos: THREE.Vector3, hitRadius: number, id: number}> = [];
+  for (let i = 0; i < merchants.length; i++) {
+    const m = merchants[i];
+    if (m.state !== 'sinking') targets.push({ pos: m.pos, hitRadius: m.hitRadius, id: m.id });
+  }
 
   // Add kraken tentacles as targets if event is active
   const currentEvent = events.getCurrentEvent();
@@ -1425,7 +1767,7 @@ function updateCombat(dt: number) {
     const m = merchants.find(m => m.id === hit.targetId);
     if (!m || m.state === 'sinking') continue;
 
-    m.hp -= hit.damage;
+    if (devInstakill) m.hp = 0; else m.hp -= hit.damage;
 
     // Chain shot effect
     if (progression.getPlayerStats().chainShotActive) {
@@ -1448,30 +1790,38 @@ function updateCombat(dt: number) {
   // Check enemy cannonballs hitting player
   const playerHit = combat.checkPlayerHit(playerPos, 2.8);
   if (playerHit) {
-    const stats = progression.getPlayerStats();
+    // In screensaver, player is invincible — just show effects
+    if (screensaverActive) {
+      explosionEffect.emit(playerHit.hitPos, 15);
+      screenShake.trigger(0.3);
+    } else {
+      explosionEffect.emit(playerHit.hitPos, 15);
+      audio.playExplosion(playerHit.hitPos, playerPos);
+      screenShake.trigger(0.6);
 
-    const dead = progression.takeDamage(playerHit.damage);
-    explosionEffect.emit(playerHit.hitPos, 15);
-    audio.playExplosion(playerHit.hitPos, playerPos);
-    screenShake.trigger(0.6);
+      if (!devGodMode) {
+        const stats = progression.getPlayerStats();
+        const dead = progression.takeDamage(playerHit.damage);
 
-    // Screen juice: damage flash + direction indicator
-    const hitDx = playerHit.hitPos.x - playerPos.x;
-    const hitDz = playerHit.hitPos.z - playerPos.z;
-    const hitAngle = Math.atan2(hitDx, hitDz) - playerAngle;
-    const normHitAngle = normalizeAngle(hitAngle);
-    let dir: 'front' | 'back' | 'left' | 'right' = 'front';
-    if (Math.abs(normHitAngle) < Math.PI / 4) dir = 'front';
-    else if (Math.abs(normHitAngle) > Math.PI * 3 / 4) dir = 'back';
-    else if (normHitAngle > 0) dir = 'left';
-    else dir = 'right';
-    screenJuice.triggerDamage(dir);
+        // Screen juice: damage flash + direction indicator
+        const hitDx = playerHit.hitPos.x - playerPos.x;
+        const hitDz = playerHit.hitPos.z - playerPos.z;
+        const hitAngle = Math.atan2(hitDx, hitDz) - playerAngle;
+        const normHitAngle = normalizeAngle(hitAngle);
+        let dir: 'front' | 'back' | 'left' | 'right' = 'front';
+        if (Math.abs(normHitAngle) < Math.PI / 4) dir = 'front';
+        else if (Math.abs(normHitAngle) > Math.PI * 3 / 4) dir = 'back';
+        else if (normHitAngle > 0) dir = 'left';
+        else dir = 'right';
+        screenJuice.triggerDamage(dir);
 
-    ui.updateHealth(stats.health, stats.maxHealth);
+        ui.updateHealth(stats.health, stats.maxHealth);
 
-    if (dead && !gameOverFired) {
-      gameOverFired = true;
-      onGameOver();
+        if (dead && !gameOverFired) {
+          gameOverFired = true;
+          onGameOver();
+        }
+      }
     }
   }
 }
@@ -1503,11 +1853,14 @@ function updateWeather(dt: number) {
     }
   }
 
-  // Update lanterns on all ships
-  setShipLanterns(playerGroup, isNight);
-  for (const m of merchants) {
-    if (m.state !== 'sinking') {
-      setShipLanterns(m.mesh, isNight);
+  // Update lanterns only when night state changes
+  if (isNight !== lastIsNight) {
+    lastIsNight = isNight;
+    setShipLanterns(playerGroup, isNight);
+    for (const m of merchants) {
+      if (m.state !== 'sinking') {
+        setShipLanterns(m.mesh, isNight);
+      }
     }
   }
 
@@ -1531,13 +1884,16 @@ function updateWorld(dt: number) {
     world.updateLOD(playerPos);
   }
 
+  // Update animated island elements (fortress flags)
+  world.updateAnimations(time, weather.getCurrentConfig().windIntensity);
+
   // Check island collision and reef damage
   const collision = world.checkCollision(playerPos, dt);
   if (collision.bounceDir) {
     playerPos.add(collision.bounceDir.multiplyScalar(dt));
     playerSpeed *= 0.5;
   }
-  if (collision.reefDamage > 0) {
+  if (collision.reefDamage > 0 && !devGodMode) {
     const dead = progression.takeDamage(collision.reefDamage);
     const stats = progression.getPlayerStats();
     ui.updateHealth(stats.health, stats.maxHealth);
@@ -1620,7 +1976,7 @@ function updateEvents(dt: number) {
   const result = events.update(dt, playerPos, Math.abs(playerSpeed));
 
   // Apply event damage to player
-  if (result.damageToPlayer > 0) {
+  if (result.damageToPlayer > 0 && !devGodMode) {
     const dead = progression.takeDamage(result.damageToPlayer);
     const stats = progression.getPlayerStats();
     ui.updateHealth(stats.health, stats.maxHealth);
@@ -1664,7 +2020,7 @@ function updateEvents(dt: number) {
       whirlpoolEffect.update(dt, time);
     } else if (currentEvt.type === 'sea_serpent') {
       const serpentDmg = seaSerpentEffect.update(dt, time, playerPos);
-      if (serpentDmg > 0) {
+      if (serpentDmg > 0 && !devGodMode) {
         const dead = progression.takeDamage(serpentDmg * dt);
         const stats = progression.getPlayerStats();
         ui.updateHealth(stats.health, stats.maxHealth);
@@ -1759,7 +2115,8 @@ function animate(now: number) {
   const dt = rawDt * timeScale;
   time += dt;
 
-  ocean.update(time, gameStarted ? playerPos : new THREE.Vector3());
+  ocean.update(time, (gameStarted || screensaverActive) ? playerPos : new THREE.Vector3());
+  skyMat.uniforms.uTime.value = time;
 
   if (gameStarted && !gamePaused) {
     updatePlayer(dt);
@@ -1777,6 +2134,63 @@ function animate(now: number) {
     // Update port scene if active
     if (portScene) {
       portScene.update(dt, time);
+    }
+  } else if (screensaverActive) {
+    // Autopilot drives playerSpeed/playerAngle
+    updateAutopilot(dt);
+
+    // Move player based on autopilot output
+    playerPos.x += Math.sin(playerAngle) * playerSpeed * dt;
+    playerPos.z += Math.cos(playerAngle) * playerSpeed * dt;
+
+    // Apply wave tilt & sails
+    applyWaveTilt(playerGroup, playerPos.x, playerPos.z, playerAngle, time, dt);
+    playerGroup.position.x = playerPos.x;
+    playerGroup.position.z = playerPos.z;
+    const weatherCfg = weather.getCurrentConfig();
+    updateShipSails(playerGroup, time, weatherCfg.windIntensity);
+
+    // Wake trail
+    const sternWorld = _tmpVec3B.set(0, 0, -2.2)
+      .applyAxisAngle(_tmpVec3C.set(0, 1, 0), playerAngle)
+      .add(playerPos);
+    wake.spawn(sternWorld, Math.abs(playerSpeed), dt);
+
+    // Reuse real game systems
+    updateMerchants(dt);
+    updateCombat(dt);
+    updateWeather(dt);
+
+    // Island LOD & animations
+    lodTimer += dt;
+    if (lodTimer >= 0.5) {
+      lodTimer = 0;
+      world.updateLOD(playerPos);
+    }
+    world.updateAnimations(time, weatherCfg.windIntensity);
+
+    // Follow camera
+    updateCamera(dt);
+
+    // Periodic merchant spawning
+    screensaverSpawnTimer += dt;
+    if (screensaverSpawnTimer >= 12 + Math.random() * 8) {
+      screensaverSpawnTimer = 0;
+      if (merchants.length < 4) {
+        const types: EnemyType[] = ['merchant_sloop', 'merchant_galleon', 'escort_frigate'];
+        const count = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < count; i++) {
+          spawnEnemy(types[Math.floor(Math.random() * types.length)], false);
+        }
+      }
+    }
+
+    // Weather cycling every 30s
+    screensaverWeatherTimer += dt;
+    if (screensaverWeatherTimer >= 30) {
+      screensaverWeatherTimer = 0;
+      screensaverWeatherIndex = (screensaverWeatherIndex + 1) % screensaverWeathers.length;
+      weather.transitionTo(screensaverWeathers[screensaverWeatherIndex], 8);
     }
   } else {
     // Title screen camera orbit

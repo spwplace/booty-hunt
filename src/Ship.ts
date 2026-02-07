@@ -64,7 +64,7 @@ function createSailMaterial(color: number): THREE.ShaderMaterial {
   });
 }
 
-function createFlagMaterial(color: number): THREE.ShaderMaterial {
+export function createFlagMaterial(color: number): THREE.ShaderMaterial {
   const c = new THREE.Color(color);
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -226,10 +226,110 @@ function getDimensions(shipClass: ShipClass): ShipClassDimensions {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  Geometry cache — shared across all ships of same class
+// ---------------------------------------------------------------------------
+
+interface ShipGeoCache {
+  hull: THREE.BoxGeometry;
+  keel: THREE.BoxGeometry;
+  bow: THREE.ConeGeometry;
+  stern: THREE.ConeGeometry;
+  deck: THREE.BoxGeometry;
+  mainMast: THREE.CylinderGeometry;
+  mainSail: THREE.PlaneGeometry;
+  foreMast: THREE.CylinderGeometry | null;
+  foreSail: THREE.PlaneGeometry | null;
+  aftMast: THREE.CylinderGeometry | null;
+  aftSail: THREE.PlaneGeometry | null;
+  jib: THREE.BufferGeometry;
+  cabin: THREE.BoxGeometry | null;
+  roof: THREE.BoxGeometry | null;
+  forecastle: THREE.BoxGeometry | null;
+  fcRail: THREE.BoxGeometry | null;
+  rail: THREE.BoxGeometry;
+  flag: THREE.PlaneGeometry;
+  lantern: THREE.SphereGeometry;
+  cannon: THREE.CylinderGeometry;
+}
+
+const geoCacheMap = new Map<ShipClass, ShipGeoCache>();
+
+function getGeoCache(cls: ShipClass): ShipGeoCache {
+  let c = geoCacheMap.get(cls);
+  if (c) return c;
+
+  const d = getDimensions(cls);
+
+  const bow = new THREE.ConeGeometry(d.bowRadius, d.bowLength, 4);
+  bow.rotateX(Math.PI / 2);
+  const stern = new THREE.ConeGeometry(d.sternRadius, d.sternLength, 4);
+  stern.rotateX(-Math.PI / 2);
+
+  const jib = new THREE.BufferGeometry();
+  const jibVerts = new Float32Array([
+    d.jibTop[0], d.jibTop[1], d.jibTop[2],
+    d.jibMid[0], d.jibMid[1], d.jibMid[2],
+    d.jibBow[0], d.jibBow[1], d.jibBow[2],
+  ]);
+  jib.setAttribute('position', new THREE.BufferAttribute(jibVerts, 3));
+  jib.computeVertexNormals();
+
+  c = {
+    hull: new THREE.BoxGeometry(d.hull[0], d.hull[1], d.hull[2]),
+    keel: new THREE.BoxGeometry(d.keel[0], d.keel[1], d.keel[2]),
+    bow,
+    stern,
+    deck: new THREE.BoxGeometry(d.deck[0], d.deck[1], d.deck[2]),
+    mainMast: new THREE.CylinderGeometry(0.04, 0.06, d.mainMastHeight, 6),
+    mainSail: new THREE.PlaneGeometry(d.mainSailSize[0], d.mainSailSize[1], 8, 8),
+    foreMast: d.hasForeMast ? new THREE.CylinderGeometry(0.03, 0.05, d.foreMastHeight, 6) : null,
+    foreSail: d.hasForeMast ? new THREE.PlaneGeometry(d.foreSailSize[0], d.foreSailSize[1], 6, 6) : null,
+    aftMast: d.hasAftMast ? new THREE.CylinderGeometry(0.03, 0.05, d.aftMastHeight, 6) : null,
+    aftSail: d.hasAftMast ? new THREE.PlaneGeometry(d.aftSailSize[0], d.aftSailSize[1], 6, 6) : null,
+    jib,
+    cabin: d.hasCabin ? new THREE.BoxGeometry(d.cabinWidth, 0.55, 0.9) : null,
+    roof: d.hasCabin ? new THREE.BoxGeometry(d.roofWidth, 0.07, 1.0) : null,
+    forecastle: d.hasForecastle ? new THREE.BoxGeometry(d.hull[0] * 0.85, 0.35, 1.2) : null,
+    fcRail: d.hasForecastle ? new THREE.BoxGeometry(0.04, 0.25, 1.2) : null,
+    rail: new THREE.BoxGeometry(0.04, 0.22, d.railLength),
+    flag: new THREE.PlaneGeometry(0.5, 0.3, 6, 4),
+    lantern: new THREE.SphereGeometry(0.12, 4, 4),
+    cannon: new THREE.CylinderGeometry(0.04, 0.06, 0.4, 4),
+  };
+  geoCacheMap.set(cls, c);
+  return c;
+}
+
+// Shared materials (never modified after creation)
+const matDark = new THREE.MeshToonMaterial({ color: 0x1e120a });
+const matDeck = new THREE.MeshToonMaterial({ color: 0xc4a060 });
+const matLantern = new THREE.MeshBasicMaterial({ color: 0xffaa44 });
+const matCannon = new THREE.MeshToonMaterial({ color: 0x222222 });
+const matCannonFire = new THREE.MeshBasicMaterial({ color: 0xff6600 });
+const matTrimGold = new THREE.MeshBasicMaterial({ color: 0xffd700 });
+const matArmorBand = new THREE.MeshToonMaterial({ color: 0x666666 });
+
+// Hull material cache by color
+const hullMatCache = new Map<number, THREE.MeshToonMaterial>();
+function getHullMat(color: number): THREE.MeshToonMaterial {
+  let m = hullMatCache.get(color);
+  if (!m) { m = new THREE.MeshToonMaterial({ color }); hullMatCache.set(color, m); }
+  return m;
+}
+
+// Jib toon sail cache by color
+const jibMatCache = new Map<number, THREE.MeshToonMaterial>();
+function getJibMat(color: number): THREE.MeshToonMaterial {
+  let m = jibMatCache.get(color);
+  if (!m) { m = new THREE.MeshToonMaterial({ color, side: THREE.DoubleSide }); jibMatCache.set(color, m); }
+  return m;
+}
+
 /**
  * Build a low-poly pirate / merchant ship out of simple primitives.
  * Returns a Group so it can be positioned / rotated as one unit.
- * Optionally accepts a shipClass to vary proportions (sloop/brigantine/galleon).
+ * Uses cached geometries and shared materials for fast instantiation.
  */
 export function createShipMesh(
   hullColor: number,
@@ -239,137 +339,102 @@ export function createShipMesh(
   shipClass?: ShipClass,
 ): THREE.Group {
   const g = new THREE.Group();
-  // YXZ order so heading (Y) applies first, then pitch (X), then roll (Z)
   g.rotation.order = 'YXZ';
 
   const cfg = visualConfig ?? {};
-  const d = getDimensions(shipClass ?? 'brigantine');
+  const cls = shipClass ?? 'brigantine';
+  const d = getDimensions(cls);
+  const geo = getGeoCache(cls);
 
-  const wood = new THREE.MeshToonMaterial({ color: hullColor });
+  const wood = getHullMat(hullColor);
   const sailMat = createSailMaterial(sailColor);
-  const dark = new THREE.MeshToonMaterial({ color: 0x1e120a });
-  const deck = new THREE.MeshToonMaterial({ color: 0xc4a060 });
 
   // ---- Hull body ----
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(d.hull[0], d.hull[1], d.hull[2]), wood);
+  const hull = new THREE.Mesh(geo.hull, wood);
   hull.position.y = 0.1;
   g.add(hull);
 
-  // ---- Keel (darker, narrower) ----
-  const keel = new THREE.Mesh(new THREE.BoxGeometry(d.keel[0], d.keel[1], d.keel[2]), dark);
+  // ---- Keel ----
+  const keel = new THREE.Mesh(geo.keel, matDark);
   keel.position.y = -0.18;
   g.add(keel);
 
-  // ---- Bow (front wedge) ----
-  const bowGeo = new THREE.ConeGeometry(d.bowRadius, d.bowLength, 4);
-  bowGeo.rotateX(Math.PI / 2);
-  const bow = new THREE.Mesh(bowGeo, wood);
+  // ---- Bow ----
+  const bow = new THREE.Mesh(geo.bow, wood);
   bow.position.set(0, 0.08, d.bowZ);
   g.add(bow);
 
-  // ---- Stern (back wedge, flatter) ----
-  const sternGeo = new THREE.ConeGeometry(d.sternRadius, d.sternLength, 4);
-  sternGeo.rotateX(-Math.PI / 2);
-  const stern = new THREE.Mesh(sternGeo, wood);
+  // ---- Stern ----
+  const stern = new THREE.Mesh(geo.stern, wood);
   stern.position.set(0, 0.08, d.sternZ);
   g.add(stern);
 
   // ---- Deck ----
-  const deckMesh = new THREE.Mesh(new THREE.BoxGeometry(d.deck[0], d.deck[1], d.deck[2]), deck);
+  const deckMesh = new THREE.Mesh(geo.deck, matDeck);
   deckMesh.position.y = 0.41;
   g.add(deckMesh);
 
   // ---- Main mast ----
-  const mast = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.04, 0.06, d.mainMastHeight, 6), dark,
-  );
+  const mast = new THREE.Mesh(geo.mainMast, matDark);
   mast.position.set(0, d.mainMastY, 0.1);
   g.add(mast);
 
-  // ---- Main sail (animated shader) ----
-  const mainSailGeo = new THREE.PlaneGeometry(d.mainSailSize[0], d.mainSailSize[1], 8, 8);
-  const mainSail = new THREE.Mesh(mainSailGeo, sailMat);
+  // ---- Main sail ----
+  const mainSail = new THREE.Mesh(geo.mainSail, sailMat);
   mainSail.position.set(0, d.mainSailY, 0.1);
   mainSail.name = 'sail';
   g.add(mainSail);
 
-  // ---- Secondary (fore) mast ----
-  if (d.hasForeMast) {
-    const mast2 = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.05, d.foreMastHeight, 6), dark,
-    );
+  // ---- Fore mast ----
+  if (d.hasForeMast && geo.foreMast && geo.foreSail) {
+    const mast2 = new THREE.Mesh(geo.foreMast, matDark);
     mast2.position.set(0, d.foreMastY, d.foreMastZ);
     g.add(mast2);
 
-    // Fore sail (animated shader)
-    const foreSailGeo = new THREE.PlaneGeometry(d.foreSailSize[0], d.foreSailSize[1], 6, 6);
     const foreSailMat = createSailMaterial(sailColor);
-    const foreSail = new THREE.Mesh(foreSailGeo, foreSailMat);
+    const foreSail = new THREE.Mesh(geo.foreSail, foreSailMat);
     foreSail.position.set(0, d.foreSailY, d.foreMastZ);
     foreSail.name = 'sail';
     g.add(foreSail);
   }
 
-  // ---- Aft mast (galleon 3rd mast) ----
-  if (d.hasAftMast) {
-    const aftMast = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.05, d.aftMastHeight, 6), dark,
-    );
+  // ---- Aft mast ----
+  if (d.hasAftMast && geo.aftMast && geo.aftSail) {
+    const aftMast = new THREE.Mesh(geo.aftMast, matDark);
     aftMast.position.set(0, d.aftMastY, d.aftMastZ);
     g.add(aftMast);
 
-    // Aft sail (animated shader)
-    const aftSailGeo = new THREE.PlaneGeometry(d.aftSailSize[0], d.aftSailSize[1], 6, 6);
     const aftSailMat = createSailMaterial(sailColor);
-    const aftSail = new THREE.Mesh(aftSailGeo, aftSailMat);
+    const aftSail = new THREE.Mesh(geo.aftSail, aftSailMat);
     aftSail.position.set(0, d.aftSailY, d.aftMastZ);
     aftSail.name = 'sail';
     g.add(aftSail);
   }
 
-  // ---- Jib (triangular front sail) ----
-  const jibGeo = new THREE.BufferGeometry();
-  const jibVerts = new Float32Array([
-    d.jibTop[0], d.jibTop[1], d.jibTop[2],
-    d.jibMid[0], d.jibMid[1], d.jibMid[2],
-    d.jibBow[0], d.jibBow[1], d.jibBow[2],
-  ]);
-  jibGeo.setAttribute('position', new THREE.BufferAttribute(jibVerts, 3));
-  jibGeo.computeVertexNormals();
-  const toonSail = new THREE.MeshToonMaterial({ color: sailColor, side: THREE.DoubleSide });
-  g.add(new THREE.Mesh(jibGeo, toonSail));
+  // ---- Jib ----
+  g.add(new THREE.Mesh(geo.jib, getJibMat(sailColor)));
 
   // ---- Stern cabin ----
-  if (d.hasCabin) {
-    const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(d.cabinWidth, 0.55, 0.9), wood,
-    );
+  if (d.hasCabin && geo.cabin && geo.roof) {
+    const cabin = new THREE.Mesh(geo.cabin, wood);
     cabin.position.set(0, 0.72, d.cabinZ);
     g.add(cabin);
 
-    // Cabin roof
-    const roof = new THREE.Mesh(
-      new THREE.BoxGeometry(d.roofWidth, 0.07, 1.0), dark,
-    );
+    const roof = new THREE.Mesh(geo.roof, matDark);
     roof.position.set(0, 1.02, d.cabinZ);
     g.add(roof);
   }
 
-  // ---- Forecastle (galleon raised bow deck) ----
-  if (d.hasForecastle) {
+  // ---- Forecastle ----
+  if (d.hasForecastle && geo.forecastle && geo.fcRail) {
     const fcWidth = d.hull[0] * 0.85;
-    const forecastle = new THREE.Mesh(
-      new THREE.BoxGeometry(fcWidth, 0.35, 1.2), wood,
-    );
+    const forecastle = new THREE.Mesh(geo.forecastle, wood);
     forecastle.position.set(0, 0.6, d.bowZ - 0.9);
     forecastle.name = 'forecastle';
     g.add(forecastle);
 
-    // Forecastle railing
     for (const side of [-1, 1]) {
-      const fcRail = new THREE.Mesh(
-        new THREE.BoxGeometry(0.04, 0.25, 1.2), dark,
-      );
+      const fcRail = new THREE.Mesh(geo.fcRail, matDark);
       fcRail.position.set(side * fcWidth * 0.5, 0.9, d.bowZ - 0.9);
       g.add(fcRail);
     }
@@ -377,97 +442,75 @@ export function createShipMesh(
 
   // ---- Railing ----
   for (const side of [-1, 1]) {
-    const rail = new THREE.Mesh(
-      new THREE.BoxGeometry(0.04, 0.22, d.railLength), dark,
-    );
+    const rail = new THREE.Mesh(geo.rail, matDark);
     rail.position.set(side * d.railWidth, 0.56, d.railZ);
     g.add(rail);
   }
 
-  // ---- Flag at top of main mast (animated shader) ----
-  const flagGeo = new THREE.PlaneGeometry(0.5, 0.3, 6, 4);
+  // ---- Flag ----
   const flagColor = sailColor === 0xf5f0e6 ? 0x222222 : sailColor;
   const flagMat = createFlagMaterial(flagColor);
-  const flag = new THREE.Mesh(flagGeo, flagMat);
+  const flag = new THREE.Mesh(geo.flag, flagMat);
   flag.position.set(0.28, d.flagY, 0.1);
   flag.name = 'flag';
   g.add(flag);
 
-  // ---- Lanterns (for night mode) ----
-  const lanternMat = new THREE.MeshBasicMaterial({ color: 0xffaa44 });
-
-  // Bow lantern
-  const bowLantern = new THREE.Mesh(new THREE.SphereGeometry(0.12, 4, 4), lanternMat);
+  // ---- Lanterns ----
+  const bowLantern = new THREE.Mesh(geo.lantern, matLantern);
   bowLantern.position.set(0, 1.2, d.bowLanternZ);
   bowLantern.name = 'lantern';
   bowLantern.visible = false;
   g.add(bowLantern);
 
-  // Bow lantern light
   const bowLight = new THREE.PointLight(0xffaa44, 0.8, 8);
   bowLight.position.set(0, 1.2, d.bowLanternZ);
   bowLight.name = 'lantern-light';
   bowLight.visible = false;
   g.add(bowLight);
 
-  // Stern lantern
-  const sternLantern = new THREE.Mesh(new THREE.SphereGeometry(0.12, 4, 4), lanternMat);
+  const sternLantern = new THREE.Mesh(geo.lantern, matLantern);
   sternLantern.position.set(0, 1.3, d.sternLanternZ);
   sternLantern.name = 'lantern';
   sternLantern.visible = false;
   g.add(sternLantern);
 
-  // Stern lantern light
   const sternLight = new THREE.PointLight(0xffaa44, 0.8, 8);
   sternLight.position.set(0, 1.3, d.sternLanternZ);
   sternLight.name = 'lantern-light';
   sternLight.visible = false;
   g.add(sternLight);
 
-  // ---- Cannons (visual only, class-dependent count per side) ----
-  const cannonColor = (cfg.weaponTier ?? 0) >= 1 ? 0x663300 : 0x222222;
-  const cannonMat = (cfg.weaponTier ?? 0) >= 1
-    ? new THREE.MeshBasicMaterial({ color: 0xff6600 })
-    : new THREE.MeshToonMaterial({ color: cannonColor });
-
+  // ---- Cannons ----
+  const cMat = (cfg.weaponTier ?? 0) >= 1 ? matCannonFire : matCannon;
   for (const side of [-1, 1]) {
     for (const z of d.cannonZPositions) {
-      const cannon = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.04, 0.06, 0.4, 4),
-        cannonMat,
-      );
-      // Rotate 90 degrees on Z axis so the cylinder points outward (along X)
+      const cannon = new THREE.Mesh(geo.cannon, cMat);
       cannon.rotation.z = Math.PI / 2;
-      // Position at hull level, on the side of the ship
       cannon.position.set(side * d.cannonSideOffset, 0.35, z);
       cannon.name = 'cannon';
       g.add(cannon);
     }
   }
 
-  // ---- Visual progression: speed tier (gold sail trim) ----
+  // ---- Visual progression: speed tier ----
   if ((cfg.speedTier ?? 0) >= 1) {
-    // Gold trim lines on sails
-    const trimMat = new THREE.MeshBasicMaterial({ color: 0xffd700 });
     const trimGeo = new THREE.BoxGeometry(d.mainSailSize[0] + 0.05, 0.04, 0.02);
-    const trim1 = new THREE.Mesh(trimGeo, trimMat);
+    const trim1 = new THREE.Mesh(trimGeo, matTrimGold);
     trim1.position.set(0, d.mainSailY - d.mainSailSize[1] * 0.5 + 0.05, 0.1);
     trim1.name = 'speed-trim';
     g.add(trim1);
-    const trim2 = new THREE.Mesh(trimGeo, trimMat);
+    const trim2 = new THREE.Mesh(trimGeo, matTrimGold);
     trim2.position.set(0, d.mainSailY + d.mainSailSize[1] * 0.5 - 0.05, 0.1);
     trim2.name = 'speed-trim';
     g.add(trim2);
   }
 
-  // ---- Visual progression: armor tier (metal bands) ----
+  // ---- Visual progression: armor tier ----
   if ((cfg.armorTier ?? 0) >= 1) {
-    const bandMat = new THREE.MeshToonMaterial({ color: 0x666666 });
+    const bandGeo = new THREE.BoxGeometry(d.hull[0] + 0.1, 0.06, 0.15);
     for (let i = 0; i < Math.min(cfg.armorTier!, 3); i++) {
       const zPos = -1.0 + i * 1.2;
-      const band = new THREE.Mesh(
-        new THREE.BoxGeometry(d.hull[0] + 0.1, 0.06, 0.15), bandMat,
-      );
+      const band = new THREE.Mesh(bandGeo, matArmorBand);
       band.position.set(0, -0.02, zPos);
       band.name = 'armor-band';
       g.add(band);
@@ -492,30 +535,47 @@ export function createShipMesh(
  * Toggle lantern visibility for night mode.
  * Traverses the ship group and sets all lantern meshes and lights on or off.
  */
+const lanternCache = new WeakMap<THREE.Group, THREE.Object3D[]>();
+
 export function setShipLanterns(ship: THREE.Group, on: boolean): void {
-  ship.traverse((child) => {
-    if (child.name === 'lantern' || child.name === 'lantern-light') {
-      child.visible = on;
-    }
-  });
+  let lanterns = lanternCache.get(ship);
+  if (!lanterns) {
+    lanterns = [];
+    ship.traverse((child) => {
+      if (child.name === 'lantern' || child.name === 'lantern-light') {
+        lanterns!.push(child);
+      }
+    });
+    lanternCache.set(ship, lanterns);
+  }
+  for (let i = 0; i < lanterns.length; i++) {
+    lanterns[i].visible = on;
+  }
 }
 
 /**
  * Update sail and flag shader uniforms for wind animation.
  * Call once per frame for each visible ship.
  */
+const sailCache = new WeakMap<THREE.Group, THREE.ShaderMaterial[]>();
+
 export function updateShipSails(ship: THREE.Group, time: number, windStrength = 0.8): void {
-  ship.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
-      const uniforms = child.material.uniforms;
-      if (uniforms.uTime !== undefined) {
-        uniforms.uTime.value = time;
+  let mats = sailCache.get(ship);
+  if (!mats) {
+    mats = [];
+    ship.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+        const u = child.material.uniforms;
+        if (u.uTime !== undefined) mats!.push(child.material);
       }
-      if (uniforms.uWindStrength !== undefined) {
-        uniforms.uWindStrength.value = windStrength;
-      }
-    }
-  });
+    });
+    sailCache.set(ship, mats);
+  }
+  for (let i = 0; i < mats.length; i++) {
+    const u = mats[i].uniforms;
+    u.uTime.value = time;
+    u.uWindStrength.value = windStrength;
+  }
 }
 
 /**

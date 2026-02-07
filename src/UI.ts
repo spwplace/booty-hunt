@@ -7,6 +7,8 @@ export class UI {
   private compassEl: HTMLElement;
   private arrowEl: HTMLElement;
   private distanceEl: HTMLElement;
+  private lastCompassAngle: number = -999;
+  private lastDistance: number = -1;
   private captureEl: HTMLElement;
   private vignetteEl: HTMLElement;
   private controlsEl: HTMLElement;
@@ -17,6 +19,7 @@ export class UI {
   private healthBar: HTMLElement | null = null;
   private healthFill: HTMLElement | null = null;
   private lastHealth: number = -1;
+  private lastMaxHealth: number = -1;
 
   // Wave elements
   private waveAnnounce: HTMLElement | null = null;
@@ -37,6 +40,8 @@ export class UI {
   // Cannon cooldown elements
   private cooldownPort: HTMLElement | null = null;
   private cooldownStarboard: HTMLElement | null = null;
+  private lastPortReady: boolean = false;
+  private lastStarboardReady: boolean = false;
 
   // Mobile cannon buttons
   private btnPort: HTMLElement | null = null;
@@ -46,6 +51,9 @@ export class UI {
   private bossHealthBar: HTMLElement | null = null;
   private bossHealthFill: HTMLElement | null = null;
   private bossNameLabel: HTMLElement | null = null;
+  private lastBossHp: number = -1;
+  private lastBossMaxHp: number = -1;
+  private bossPhaseLineAdded: boolean = false;
 
   // Wave preview
   private wavePreview: HTMLElement | null = null;
@@ -68,6 +76,8 @@ export class UI {
   // Animated score
   private displayedScore: number = 0;
   private actualScore: number = 0;
+  private lastRenderedScore: number = -1;
+  private scoreValueEl: HTMLElement | null = null;
   private minimapFrame: number = 0;
 
   // --- New V1 elements ---
@@ -80,8 +90,16 @@ export class UI {
   private eventWarningEl: HTMLElement | null = null;
   private eventWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   private eventTimerEl: HTMLElement | null = null;
+  private eventTimerNameEl: HTMLElement | null = null;
+  private eventTimerFillEl: HTMLElement | null = null;
+  private eventTimerCountdownEl: HTMLElement | null = null;
+  private lastEventTimerSec: number = -1;
+  private lastEventTimerPct: number = -1;
   private treasureMapEl: HTMLElement | null = null;
   private portCrewHireEl: HTMLElement | null = null;
+
+  // Screensaver mode: when true, gameplay UI updates are no-ops
+  screensaverMode = false;
 
   constructor() {
     this.titleEl = document.getElementById('title')!;
@@ -158,18 +176,38 @@ export class UI {
   }
 
   updateScore(score: number) {
-    this.scoreEl.innerHTML = `<span class="label">Gold Plundered</span>${score.toLocaleString()}`;
+    if (this.screensaverMode) return;
+    if (score === this.lastRenderedScore) return;
+    this.lastRenderedScore = score;
+    if (!this.scoreValueEl) {
+      // First call: set up the DOM structure once
+      this.scoreEl.innerHTML = '<span class="label">Gold Plundered</span><span id="score-value">0</span>';
+      this.scoreValueEl = document.getElementById('score-value');
+    }
+    if (this.scoreValueEl) {
+      this.scoreValueEl.textContent = score.toLocaleString();
+    }
   }
 
   updateCompass(angle: number) {
+    if (this.screensaverMode) return;
+    // Quantize to ~0.5 degree to avoid per-frame style writes
+    const q = Math.round(angle * 100);
+    if (q === this.lastCompassAngle) return;
+    this.lastCompassAngle = q;
     this.arrowEl.style.transform = `translateX(-50%) rotate(${angle}rad)`;
   }
 
   updateDistance(dist: number) {
-    this.distanceEl.textContent = `${Math.round(dist)} leagues`;
+    if (this.screensaverMode) return;
+    const rounded = Math.round(dist);
+    if (rounded === this.lastDistance) return;
+    this.lastDistance = rounded;
+    this.distanceEl.textContent = `${rounded} leagues`;
   }
 
   showCapture(text: string, combo: number) {
+    if (this.screensaverMode) return;
     if (this.captureTimeout) clearTimeout(this.captureTimeout);
     this.captureEl.textContent = text;
     this.captureEl.classList.add('show');
@@ -204,23 +242,9 @@ export class UI {
   /* ------------------------------------------------------------------ */
 
   updateHealth(current: number, max: number) {
+    if (this.screensaverMode) return;
     if (!this.healthFill || !this.healthBar) return;
-
-    const pct = Math.max(0, Math.min(1, current / max)) * 100;
-
-    // Determine color based on percentage
-    let color: string;
-    if (pct > 60) {
-      color = '#4caf50'; // green
-    } else if (pct > 30) {
-      color = '#ffeb3b'; // yellow
-    } else {
-      color = '#f44336'; // red
-    }
-
-    this.healthFill.style.width = `${pct}%`;
-    this.healthFill.style.backgroundColor = color;
-    this.healthFill.style.transition = 'width 0.3s ease, background-color 0.3s ease';
+    if (current === this.lastHealth && max === this.lastMaxHealth) return;
 
     // Flash red on damage (health decreased)
     if (this.lastHealth >= 0 && current < this.lastHealth) {
@@ -231,6 +255,13 @@ export class UI {
     }
 
     this.lastHealth = current;
+    this.lastMaxHealth = max;
+
+    const pct = Math.max(0, Math.min(1, current / max)) * 100;
+    const color = pct > 60 ? '#4caf50' : pct > 30 ? '#ffeb3b' : '#f44336';
+
+    this.healthFill.style.width = `${pct}%`;
+    this.healthFill.style.backgroundColor = color;
   }
 
   /* ------------------------------------------------------------------ */
@@ -263,6 +294,7 @@ export class UI {
   }
 
   updateWaveCounter(wave: number, shipsLeft: number, shipsTotal: number) {
+    if (this.screensaverMode) return;
     if (!this.waveCounter) return;
     this.waveCounter.textContent = `Wave ${wave} - Ships: ${shipsLeft}/${shipsTotal}`;
   }
@@ -436,13 +468,20 @@ export class UI {
   /* ------------------------------------------------------------------ */
 
   updateCooldowns(portReady: boolean, starboardReady: boolean) {
-    if (this.cooldownPort) {
-      this.cooldownPort.classList.toggle('ready', portReady);
-      this.cooldownPort.classList.toggle('reloading', !portReady);
+    if (this.screensaverMode) return;
+    if (portReady !== this.lastPortReady) {
+      this.lastPortReady = portReady;
+      if (this.cooldownPort) {
+        this.cooldownPort.classList.toggle('ready', portReady);
+        this.cooldownPort.classList.toggle('reloading', !portReady);
+      }
     }
-    if (this.cooldownStarboard) {
-      this.cooldownStarboard.classList.toggle('ready', starboardReady);
-      this.cooldownStarboard.classList.toggle('reloading', !starboardReady);
+    if (starboardReady !== this.lastStarboardReady) {
+      this.lastStarboardReady = starboardReady;
+      if (this.cooldownStarboard) {
+        this.cooldownStarboard.classList.toggle('ready', starboardReady);
+        this.cooldownStarboard.classList.toggle('reloading', !starboardReady);
+      }
     }
   }
 
@@ -479,10 +518,12 @@ export class UI {
   /* ------------------------------------------------------------------ */
 
   updateScoreAnimated(score: number) {
+    if (this.screensaverMode) return;
     this.actualScore = score;
   }
 
   updateScoreDisplay(dt: number) {
+    if (this.screensaverMode) return;
     if (this.displayedScore === this.actualScore) return;
 
     const diff = this.actualScore - this.displayedScore;
@@ -513,6 +554,10 @@ export class UI {
     }
     if (!this.bossHealthBar) return;
 
+    this.lastBossHp = -1;
+    this.lastBossMaxHp = -1;
+    this.bossPhaseLineAdded = false;
+
     if (this.bossNameLabel) {
       this.bossNameLabel.textContent = name;
     }
@@ -522,34 +567,25 @@ export class UI {
 
   updateBossHealth(current: number, max: number) {
     if (!this.bossHealthFill) return;
+    if (current === this.lastBossHp && max === this.lastBossMaxHp) return;
+    this.lastBossHp = current;
+    this.lastBossMaxHp = max;
 
     const pct = Math.max(0, Math.min(1, current / max)) * 100;
     this.bossHealthFill.style.width = `${pct}%`;
+    this.bossHealthFill.style.backgroundColor = pct > 50 ? '#f44336' : pct > 25 ? '#ff9800' : '#ff5252';
 
-    // Color shift based on health
-    if (pct > 50) {
-      this.bossHealthFill.style.backgroundColor = '#f44336';
-    } else if (pct > 25) {
-      this.bossHealthFill.style.backgroundColor = '#ff9800';
-    } else {
-      this.bossHealthFill.style.backgroundColor = '#ff5252';
-    }
-
-    this.bossHealthFill.style.transition = 'width 0.3s ease, background-color 0.3s ease';
-
-    // Phase line at 50%
-    if (this.bossHealthBar) {
-      let phaseLine = this.bossHealthBar.querySelector('.boss-phase-line') as HTMLElement | null;
-      if (!phaseLine) {
-        phaseLine = document.createElement('div');
-        phaseLine.className = 'boss-phase-line';
-        phaseLine.style.cssText = `
-          position:absolute; left:50%; top:0; bottom:0; width:2px;
-          background:rgba(255,255,255,0.5); pointer-events:none; z-index:1;
-        `;
-        this.bossHealthBar.style.position = 'relative';
-        this.bossHealthBar.appendChild(phaseLine);
-      }
+    // Phase line at 50% — add once
+    if (!this.bossPhaseLineAdded && this.bossHealthBar) {
+      this.bossPhaseLineAdded = true;
+      const phaseLine = document.createElement('div');
+      phaseLine.className = 'boss-phase-line';
+      phaseLine.style.cssText = `
+        position:absolute; left:50%; top:0; bottom:0; width:2px;
+        background:rgba(255,255,255,0.5); pointer-events:none; z-index:1;
+      `;
+      this.bossHealthBar.style.position = 'relative';
+      this.bossHealthBar.appendChild(phaseLine);
     }
   }
 
@@ -613,6 +649,7 @@ export class UI {
     entities: Array<{ x: number; z: number; type: 'merchant' | 'escort' | 'boss' }>,
     cursedCompass = false,
   ) {
+    if (this.screensaverMode) return;
     this.minimapFrame++;
     if (this.minimapFrame % 3 !== 0) return;
 
@@ -1265,17 +1302,36 @@ export class UI {
     }
     if (!this.eventTimerEl) return;
 
-    const pct = Math.max(0, Math.min(1, remaining / total)) * 100;
-    const countdownSec = Math.ceil(remaining);
+    // Build DOM structure once, then update values
+    if (!this.eventTimerNameEl) {
+      this.eventTimerEl.innerHTML = `
+        <div class="event-timer-name"></div>
+        <div class="event-timer-track">
+          <div class="event-timer-fill"></div>
+        </div>
+        <div class="event-timer-countdown"></div>
+      `;
+      this.eventTimerNameEl = this.eventTimerEl.querySelector('.event-timer-name');
+      this.eventTimerFillEl = this.eventTimerEl.querySelector('.event-timer-fill');
+      this.eventTimerCountdownEl = this.eventTimerEl.querySelector('.event-timer-countdown');
+      this.lastEventTimerSec = -1;
+      this.lastEventTimerPct = -1;
+    }
 
     this.eventTimerEl.style.display = 'block';
-    this.eventTimerEl.innerHTML = `
-      <div class="event-timer-name">${eventName}</div>
-      <div class="event-timer-track">
-        <div class="event-timer-fill" style="width:${pct}%"></div>
-      </div>
-      <div class="event-timer-countdown">${countdownSec}s</div>
-    `;
+    this.eventTimerNameEl!.textContent = eventName;
+
+    const countdownSec = Math.ceil(remaining);
+    if (countdownSec !== this.lastEventTimerSec) {
+      this.lastEventTimerSec = countdownSec;
+      this.eventTimerCountdownEl!.textContent = `${countdownSec}s`;
+    }
+
+    const pctRounded = Math.round(Math.max(0, Math.min(1, remaining / total)) * 100);
+    if (pctRounded !== this.lastEventTimerPct) {
+      this.lastEventTimerPct = pctRounded;
+      this.eventTimerFillEl!.style.width = `${pctRounded}%`;
+    }
   }
 
   hideEventTimer(): void {
@@ -1285,6 +1341,9 @@ export class UI {
     if (this.eventTimerEl) {
       this.eventTimerEl.style.display = 'none';
     }
+    this.eventTimerNameEl = null;
+    this.eventTimerFillEl = null;
+    this.eventTimerCountdownEl = null;
   }
 
   /* ------------------------------------------------------------------ */

@@ -62,6 +62,25 @@
       opacity: 0.5;
       animation: pulse 2s ease-in-out infinite;
     }
+    #screensaver-btn {
+      display: block;
+      margin: 1.5rem auto 0;
+      padding: 0.5rem 1.5rem;
+      background: transparent;
+      border: 1px solid rgba(255, 215, 0, 0.3);
+      color: rgba(255, 215, 0, 0.6);
+      font-family: 'Pirata One', 'Georgia', serif;
+      font-size: clamp(0.7rem, 2vw, 0.95rem);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      letter-spacing: 0.05em;
+      pointer-events: auto;
+    }
+    #screensaver-btn:hover {
+      border-color: rgba(255, 215, 0, 0.6);
+      color: #FFD700;
+      background: rgba(255, 215, 0, 0.08);
+    }
     @keyframes pulse {
       0%, 100% { opacity: 0.3; }
       50% { opacity: 0.7; }
@@ -625,7 +644,6 @@
       text-shadow: 1px 1px 0 #000;
     }
     #port-shop-list {
-      max-height: 300px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
@@ -686,8 +704,11 @@
       padding: 0.6rem;
       margin-bottom: 0.5rem;
       cursor: pointer;
-      pointer-events: auto;
+      pointer-events: none;
       transition: transform 0.2s, border-color 0.2s;
+    }
+    #port-overlay.show .port-btn {
+      pointer-events: auto;
     }
     .port-btn:hover {
       transform: scale(1.02);
@@ -1247,7 +1268,6 @@
       #synergy-popup { font-size: 1.2rem; }
       #port-panels { flex-direction: column; }
       #port-title { font-size: 1.8rem; }
-      #port-shop-list { max-height: 200px; }
       .port-shop-item .shop-icon { font-size: 1.2rem; }
       .port-shop-item .shop-name { font-size: 0.85rem; }
       .ship-card { width: 160px; padding: 1rem 0.7rem; }
@@ -1293,6 +1313,7 @@
       <h1>Booty Hunt</h1>
       <p class="subtitle">The ocean be vast... but so be yer greed</p>
       <p class="hint" id="title-hint">Press any key to set sail</p>
+      <button id="screensaver-btn">Watch the Seas</button>
     </div>
     <div id="score"><span class="label">Gold Plundered</span>0</div>
     <div id="combo"></div>

@@ -260,7 +260,7 @@ export interface Island {
 }
 
 // ===================================================================
-//  Wave Config V1 (12-wave arc)
+//  Wave Config V1 (5-wave arc)
 // ===================================================================
 
 export interface WaveConfigV1 {
@@ -278,18 +278,16 @@ export interface WaveConfigV1 {
 }
 
 export const WAVE_TABLE: WaveConfigV1[] = [
-  { wave: 1,  totalShips: 6,  armedPercent: 0.15, speedMultiplier: 1.0,  healthMultiplier: 1.0,  weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon'],                          bossName: null,             bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 2,  totalShips: 8,  armedPercent: 0.20, speedMultiplier: 1.06, healthMultiplier: 1.08, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],        bossName: null,             bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 3,  totalShips: 8,  armedPercent: 0.30, speedMultiplier: 1.12, healthMultiplier: 1.16, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],        bossName: null,             bossHp: 0,   isPortWave: true,  specialEvent: null },
-  { wave: 4,  totalShips: 10, armedPercent: 0.35, speedMultiplier: 1.18, healthMultiplier: 1.24, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'ghost_ship'], bossName: null,      bossHp: 0,   isPortWave: false, specialEvent: 'ghost_ship_event' },
-  { wave: 5,  totalShips: 10, armedPercent: 0.40, speedMultiplier: 1.24, healthMultiplier: 1.32, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],        bossName: 'Captain Blackbeard', bossHp: 400, isPortWave: false, specialEvent: null },
-  { wave: 6,  totalShips: 10, armedPercent: 0.45, speedMultiplier: 1.30, healthMultiplier: 1.40, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'navy_warship'], bossName: null,   bossHp: 0,   isPortWave: true,  specialEvent: null },
-  { wave: 7,  totalShips: 12, armedPercent: 0.50, speedMultiplier: 1.36, healthMultiplier: 1.48, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'navy_warship'], bossName: null,   bossHp: 0,   isPortWave: false, specialEvent: 'sea_serpent' },
-  { wave: 8,  totalShips: 12, armedPercent: 0.55, speedMultiplier: 1.42, healthMultiplier: 1.56, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship'],   bossName: null,   bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 9,  totalShips: 12, armedPercent: 0.60, speedMultiplier: 1.48, healthMultiplier: 1.64, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'navy_warship'], bossName: null, bossHp: 0, isPortWave: true, specialEvent: 'kraken' },
-  { wave: 10, totalShips: 14, armedPercent: 0.65, speedMultiplier: 1.54, healthMultiplier: 1.72, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'navy_warship'], bossName: 'The Kraken Lord', bossHp: 600, isPortWave: false, specialEvent: null },
-  { wave: 11, totalShips: 14, armedPercent: 0.70, speedMultiplier: 1.60, healthMultiplier: 1.80, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: null, bossHp: 0, isPortWave: false, specialEvent: null },
-  { wave: 12, totalShips: 14, armedPercent: 0.75, speedMultiplier: 1.66, healthMultiplier: 1.88, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: 'Admiral Drake', bossHp: 800, isPortWave: false, specialEvent: null },
+  // W1: Easy intro — unarmed merchants, clear skies
+  { wave: 1, totalShips: 4,  armedPercent: 0,    speedMultiplier: 1.0,  healthMultiplier: 1.0,  weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon'],                                                              bossName: null,              bossHp: 0,   isPortWave: false, specialEvent: null },
+  // W2: First challenge — some armed escorts, fog rolls in
+  { wave: 2, totalShips: 5,  armedPercent: 0.20, speedMultiplier: 1.10, healthMultiplier: 1.15, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                                             bossName: null,              bossHp: 0,   isPortWave: false, specialEvent: null },
+  // W3: Mid-game boss + port visit, storm, ghost event
+  { wave: 3, totalShips: 6,  armedPercent: 0.35, speedMultiplier: 1.20, healthMultiplier: 1.30, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'ghost_ship'],                                bossName: 'Captain Blackbeard', bossHp: 300, isPortWave: true,  specialEvent: 'ghost_ship_event' },
+  // W4: Night assault — fire ships, navy, sea serpent event
+  { wave: 4, totalShips: 7,  armedPercent: 0.50, speedMultiplier: 1.35, healthMultiplier: 1.50, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],  bossName: null,              bossHp: 0,   isPortWave: false, specialEvent: 'sea_serpent' },
+  // W5: Final wave — storm, all enemy types, final boss
+  { wave: 5, totalShips: 8,  armedPercent: 0.60, speedMultiplier: 1.50, healthMultiplier: 1.70, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],  bossName: 'Admiral Drake',   bossHp: 500, isPortWave: false, specialEvent: 'kraken' },
 ];
 
 // ===================================================================

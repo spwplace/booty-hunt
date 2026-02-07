@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Island, IslandType } from './Types';
+import { createFlagMaterial } from './Ship';
 
 // ===================================================================
 //  Seeded RNG (mulberry32)
@@ -88,8 +89,39 @@ const ISLAND_TYPE_CONFIGS: Record<IslandType, IslandTypeConfig> = {
 };
 
 // ===================================================================
+//  Constants
+// ===================================================================
+
+const ISLAND_BASE_Y = 0.8; // raised above typical wave peak (~0.5)
+
+// ===================================================================
 //  Geometry builders
 // ===================================================================
+
+/** Add a shoreline beach ring that extends below waterline to hide clipping. */
+function addBeachRing(group: THREE.Group, radius: number, rng: () => number): void {
+  const beachGeo = new THREE.CylinderGeometry(radius * 1.3, radius * 1.4, 0.4, 16);
+  const beachMat = new THREE.MeshToonMaterial({ color: COLORS.sandDark });
+  const beach = new THREE.Mesh(beachGeo, beachMat);
+  beach.position.y = -ISLAND_BASE_Y + 0.3; // sits at waterline
+  group.add(beach);
+}
+
+/** Apply vertex color variation to a cylinder/cone geometry for natural look. */
+function applyVertexColors(geo: THREE.BufferGeometry, baseColor: THREE.Color, rng: () => number, variation: number = 0.08): void {
+  const posAttr = geo.getAttribute('position');
+  const count = posAttr.count;
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = baseColor.r + (rng() - 0.5) * variation * 2;
+    const g = baseColor.g + (rng() - 0.5) * variation * 2;
+    const b = baseColor.b + (rng() - 0.5) * variation * 2;
+    colors[i * 3] = Math.max(0, Math.min(1, r));
+    colors[i * 3 + 1] = Math.max(0, Math.min(1, g));
+    colors[i * 3 + 2] = Math.max(0, Math.min(1, b));
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
 
 /** Create a palm tree group at origin. */
 function createPalmTree(rng: () => number, scale: number = 1): THREE.Group {
@@ -123,23 +155,27 @@ function createPalmTree(rng: () => number, scale: number = 1): THREE.Group {
   return tree;
 }
 
-/** Build rocky island geometry. 3-5 cone stacks at random offsets. */
+/** Build rocky island geometry. 3-5 cone stacks + rock scatter + tide pool. */
 function buildRockyIsland(rng: () => number, radius: number): THREE.Group {
   const group = new THREE.Group();
+
+  // Beach ring
+  addBeachRing(group, radius, rng);
 
   const coneCount = 3 + Math.floor(rng() * 3); // 3-5
   for (let i = 0; i < coneCount; i++) {
     const coneRadius = radius * (0.3 + rng() * 0.35);
     const coneHeight = radius * (0.5 + rng() * 0.8);
-    const geo = new THREE.ConeGeometry(coneRadius, coneHeight, 6 + Math.floor(rng() * 3));
+    const segments = 6 + Math.floor(rng() * 3);
+    const geo = new THREE.ConeGeometry(coneRadius, coneHeight, segments);
 
     const colorChoice = rng();
-    let color: number;
-    if (colorChoice < 0.4) color = COLORS.stoneGray;
-    else if (colorChoice < 0.7) color = COLORS.stoneDark;
-    else color = COLORS.stoneMid;
+    const baseColor = colorChoice < 0.4 ? new THREE.Color(COLORS.stoneGray)
+      : colorChoice < 0.7 ? new THREE.Color(COLORS.stoneDark)
+      : new THREE.Color(COLORS.stoneMid);
 
-    const mat = new THREE.MeshToonMaterial({ color });
+    applyVertexColors(geo, baseColor, rng, 0.06);
+    const mat = new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors: true });
     const mesh = new THREE.Mesh(geo, mat);
 
     // Scatter within island radius
@@ -157,6 +193,39 @@ function buildRockyIsland(rng: () => number, radius: number): THREE.Group {
     group.add(mesh);
   }
 
+  // Rock scatter: 5-8 small irregular boxes at base
+  const rockCount = 5 + Math.floor(rng() * 4);
+  for (let i = 0; i < rockCount; i++) {
+    const rw = 0.3 + rng() * 0.5;
+    const rh = 0.2 + rng() * 0.4;
+    const rd = 0.3 + rng() * 0.5;
+    const rockGeo = new THREE.BoxGeometry(rw, rh, rd);
+    const rockColor = rng() > 0.5 ? COLORS.stoneDark : COLORS.stoneMid;
+    const rockMat = new THREE.MeshToonMaterial({ color: rockColor });
+    const rock = new THREE.Mesh(rockGeo, rockMat);
+    const angle = rng() * Math.PI * 2;
+    const dist = radius * (0.4 + rng() * 0.5);
+    rock.position.set(
+      Math.cos(angle) * dist,
+      rh * 0.3 + rng() * 0.3,
+      Math.sin(angle) * dist,
+    );
+    rock.rotation.set(rng() * 0.4, rng() * Math.PI, rng() * 0.4);
+    group.add(rock);
+  }
+
+  // Tide pool: small shallow-water cylinder on one side
+  const tideGeo = new THREE.CylinderGeometry(radius * 0.15, radius * 0.18, 0.15, 8);
+  const tideMat = new THREE.MeshToonMaterial({ color: COLORS.waterShallow });
+  const tide = new THREE.Mesh(tideGeo, tideMat);
+  const tideAngle = rng() * Math.PI * 2;
+  tide.position.set(
+    Math.cos(tideAngle) * radius * 0.5,
+    0.1,
+    Math.sin(tideAngle) * radius * 0.5,
+  );
+  group.add(tide);
+
   // Optional moss patches on top of largest cone
   if (rng() > 0.4) {
     const mossGeo = new THREE.SphereGeometry(radius * 0.15, 5, 4);
@@ -167,17 +236,38 @@ function buildRockyIsland(rng: () => number, radius: number): THREE.Group {
     group.add(moss);
   }
 
+  // Seagull perches: tiny white dots on peak cones
+  const gullCount = 2 + Math.floor(rng() * 3);
+  for (let i = 0; i < gullCount; i++) {
+    const gullGeo = new THREE.SphereGeometry(0.08, 4, 3);
+    const gullMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const gull = new THREE.Mesh(gullGeo, gullMat);
+    const angle = rng() * Math.PI * 2;
+    const dist = rng() * radius * 0.3;
+    gull.position.set(
+      Math.cos(angle) * dist,
+      radius * (0.5 + rng() * 0.5),
+      Math.sin(angle) * dist,
+    );
+    group.add(gull);
+  }
+
   return group;
 }
 
-/** Build sandy island: flat cylinder base + 1-2 palms. */
+/** Build sandy island: flat cylinder base + palms + beach rocks + driftwood + lagoon. */
 function buildSandyIsland(rng: () => number, radius: number): THREE.Group {
   const group = new THREE.Group();
 
-  // Sand base: flat cylinder
+  // Beach ring
+  addBeachRing(group, radius, rng);
+
+  // Sand base: flat cylinder with vertex color variation
   const baseHeight = 0.5 + rng() * 0.3;
   const baseGeo = new THREE.CylinderGeometry(radius, radius * 1.1, baseHeight, 12);
-  const baseMat = new THREE.MeshToonMaterial({ color: COLORS.sand });
+  const sandBase = new THREE.Color(COLORS.sand);
+  applyVertexColors(baseGeo, sandBase, rng, 0.05);
+  const baseMat = new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors: true });
   const base = new THREE.Mesh(baseGeo, baseMat);
   base.position.y = baseHeight * 0.5 - 0.2;
   group.add(base);
@@ -203,30 +293,83 @@ function buildSandyIsland(rng: () => number, radius: number): THREE.Group {
     group.add(palm);
   }
 
+  // Beach rocks: 2-4 small dark boxes
+  const rockCount = 2 + Math.floor(rng() * 3);
+  for (let i = 0; i < rockCount; i++) {
+    const rSize = 0.15 + rng() * 0.25;
+    const rockGeo = new THREE.BoxGeometry(rSize, rSize * 0.6, rSize);
+    const rockMat = new THREE.MeshToonMaterial({ color: COLORS.stoneDark });
+    const rock = new THREE.Mesh(rockGeo, rockMat);
+    const angle = rng() * Math.PI * 2;
+    const dist = radius * (0.3 + rng() * 0.5);
+    rock.position.set(
+      Math.cos(angle) * dist,
+      baseHeight * 0.3 + rng() * 0.1,
+      Math.sin(angle) * dist,
+    );
+    rock.rotation.y = rng() * Math.PI;
+    group.add(rock);
+  }
+
+  // Driftwood: 1-2 elongated thin boxes
+  const driftCount = 1 + Math.floor(rng() * 2);
+  for (let i = 0; i < driftCount; i++) {
+    const driftGeo = new THREE.BoxGeometry(0.08, 0.06, 0.8 + rng() * 0.5);
+    const driftMat = new THREE.MeshToonMaterial({ color: 0x8b7355 });
+    const drift = new THREE.Mesh(driftGeo, driftMat);
+    const angle = rng() * Math.PI * 2;
+    const dist = radius * (0.5 + rng() * 0.4);
+    drift.position.set(
+      Math.cos(angle) * dist,
+      baseHeight * 0.2,
+      Math.sin(angle) * dist,
+    );
+    drift.rotation.y = rng() * Math.PI;
+    drift.rotation.z = (rng() - 0.5) * 0.2;
+    group.add(drift);
+  }
+
+  // Shallow water lagoon at island edge
+  const lagoonGeo = new THREE.CylinderGeometry(radius * 0.2, radius * 0.25, 0.15, 8);
+  const lagoonMat = new THREE.MeshToonMaterial({ color: 0x40b8b8, transparent: true, opacity: 0.7 });
+  const lagoon = new THREE.Mesh(lagoonGeo, lagoonMat);
+  const lagAngle = rng() * Math.PI * 2;
+  lagoon.position.set(
+    Math.cos(lagAngle) * radius * 0.8,
+    -0.05,
+    Math.sin(lagAngle) * radius * 0.8,
+  );
+  group.add(lagoon);
+
   return group;
 }
 
-/** Build jungle island: larger base, 3-5 palms, foliage spheres. */
+/** Build jungle island: larger base, 5-8 palms, foliage, undergrowth, flowers, waterfall. */
 function buildJungleIsland(rng: () => number, radius: number): THREE.Group {
   const group = new THREE.Group();
 
-  // Large terrain base
+  // Beach ring
+  addBeachRing(group, radius, rng);
+
+  // Large terrain base with vertex color variation
   const baseHeight = 0.8 + rng() * 0.5;
   const baseGeo = new THREE.CylinderGeometry(radius * 0.95, radius * 1.1, baseHeight, 14);
-  const baseMat = new THREE.MeshToonMaterial({ color: COLORS.jungleGreen });
+  const jungleBase = new THREE.Color(COLORS.jungleGreen);
+  applyVertexColors(baseGeo, jungleBase, rng, 0.07);
+  const baseMat = new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors: true });
   const base = new THREE.Mesh(baseGeo, baseMat);
   base.position.y = baseHeight * 0.5 - 0.3;
   group.add(base);
 
-  // Sandy beach rim
+  // Sandy beach rim (inner, above the beach ring)
   const beachGeo = new THREE.CylinderGeometry(radius * 1.05, radius * 1.2, 0.2, 14);
   const beachMat = new THREE.MeshToonMaterial({ color: COLORS.sandDark });
   const beach = new THREE.Mesh(beachGeo, beachMat);
   beach.position.y = -0.2;
   group.add(beach);
 
-  // 3-5 palm trees
-  const palmCount = 3 + Math.floor(rng() * 3);
+  // 5-8 palm trees (increased from 3-5)
+  const palmCount = 5 + Math.floor(rng() * 4);
   for (let i = 0; i < palmCount; i++) {
     const palm = createPalmTree(rng, 0.9 + rng() * 0.4);
     const angle = rng() * Math.PI * 2;
@@ -239,7 +382,7 @@ function buildJungleIsland(rng: () => number, radius: number): THREE.Group {
     group.add(palm);
   }
 
-  // Dense foliage spheres (2-4)
+  // Dense canopy foliage spheres (2-4)
   const foliageCount = 2 + Math.floor(rng() * 3);
   for (let i = 0; i < foliageCount; i++) {
     const fRadius = radius * (0.2 + rng() * 0.2);
@@ -258,6 +401,54 @@ function buildJungleIsland(rng: () => number, radius: number): THREE.Group {
     group.add(foliage);
   }
 
+  // Undergrowth: 3-5 small green spheres at ground level
+  const undergrowthCount = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < undergrowthCount; i++) {
+    const uRadius = 0.25 + rng() * 0.3;
+    const uGeo = new THREE.SphereGeometry(uRadius, 5, 4);
+    const uColor = rng() > 0.5 ? COLORS.jungleLight : COLORS.jungleDark;
+    const uMat = new THREE.MeshToonMaterial({ color: uColor });
+    const bush = new THREE.Mesh(uGeo, uMat);
+    const angle = rng() * Math.PI * 2;
+    const dist = radius * (0.2 + rng() * 0.5);
+    bush.position.set(
+      Math.cos(angle) * dist,
+      baseHeight * 0.3 + uRadius * 0.3,
+      Math.sin(angle) * dist,
+    );
+    bush.scale.y = 0.5 + rng() * 0.3;
+    group.add(bush);
+  }
+
+  // Flowers: 2-3 tiny colored spheres in foliage
+  const FLOWER_COLORS = [0xff6688, 0xffdd44, 0xff4444];
+  const flowerCount = 2 + Math.floor(rng() * 2);
+  for (let i = 0; i < flowerCount; i++) {
+    const fGeo = new THREE.SphereGeometry(0.12, 4, 3);
+    const fMat = new THREE.MeshBasicMaterial({ color: FLOWER_COLORS[i % FLOWER_COLORS.length] });
+    const flower = new THREE.Mesh(fGeo, fMat);
+    const angle = rng() * Math.PI * 2;
+    const dist = radius * (0.15 + rng() * 0.4);
+    flower.position.set(
+      Math.cos(angle) * dist,
+      baseHeight * 0.4 + rng() * 0.5,
+      Math.sin(angle) * dist,
+    );
+    group.add(flower);
+  }
+
+  // Waterfall hint: narrow blue-tinted box on one side
+  const waterfallGeo = new THREE.BoxGeometry(0.15, baseHeight * 0.8, 0.3);
+  const waterfallMat = new THREE.MeshToonMaterial({ color: 0x5599cc, transparent: true, opacity: 0.6 });
+  const waterfall = new THREE.Mesh(waterfallGeo, waterfallMat);
+  const wfAngle = rng() * Math.PI * 2;
+  waterfall.position.set(
+    Math.cos(wfAngle) * radius * 0.7,
+    baseHeight * 0.4,
+    Math.sin(wfAngle) * radius * 0.7,
+  );
+  group.add(waterfall);
+
   // Hidden cove indent on one side
   const coveGeo = new THREE.CylinderGeometry(radius * 0.25, radius * 0.3, 0.4, 8);
   const coveMat = new THREE.MeshToonMaterial({ color: COLORS.waterShallow });
@@ -273,14 +464,19 @@ function buildJungleIsland(rng: () => number, radius: number): THREE.Group {
   return group;
 }
 
-/** Build fortress island: stone ruins with box walls & cylinder tower. */
+/** Build fortress island: stone ruins with walls, tower, dock, flag, torch, vines. */
 function buildFortressIsland(rng: () => number, radius: number): THREE.Group {
   const group = new THREE.Group();
 
-  // Stone foundation platform
+  // Beach ring
+  addBeachRing(group, radius, rng);
+
+  // Stone foundation platform with vertex color variation
   const baseHeight = 0.6 + rng() * 0.3;
   const baseGeo = new THREE.CylinderGeometry(radius * 0.9, radius * 1.05, baseHeight, 10);
-  const baseMat = new THREE.MeshToonMaterial({ color: COLORS.fortStone });
+  const fortBase = new THREE.Color(COLORS.fortStone);
+  applyVertexColors(baseGeo, fortBase, rng, 0.06);
+  const baseMat = new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors: true });
   const base = new THREE.Mesh(baseGeo, baseMat);
   base.position.y = baseHeight * 0.5 - 0.2;
   group.add(base);
@@ -310,6 +506,18 @@ function buildFortressIsland(rng: () => number, radius: number): THREE.Group {
     wall.rotation.z = (rng() - 0.5) * 0.1;
 
     group.add(wall);
+
+    // Vine/moss on walls: green-tinted boxes
+    if (rng() > 0.4) {
+      const vineGeo = new THREE.BoxGeometry(wallW * 0.3, wallH * 0.4, wallD * 0.15);
+      const vineMat = new THREE.MeshToonMaterial({ color: COLORS.mossGreen });
+      const vine = new THREE.Mesh(vineGeo, vineMat);
+      vine.position.copy(wall.position);
+      vine.position.y -= wallH * 0.15;
+      vine.position.x += (rng() - 0.5) * wallW * 0.3;
+      vine.rotation.y = wall.rotation.y;
+      group.add(vine);
+    }
   }
 
   // Central tower
@@ -320,10 +528,12 @@ function buildFortressIsland(rng: () => number, radius: number): THREE.Group {
   );
   const towerMat = new THREE.MeshToonMaterial({ color: COLORS.fortStone });
   const tower = new THREE.Mesh(towerGeo, towerMat);
+  const towerX = (rng() - 0.5) * radius * 0.3;
+  const towerZ = (rng() - 0.5) * radius * 0.3;
   tower.position.set(
-    (rng() - 0.5) * radius * 0.3,
+    towerX,
     baseHeight + towerHeight * 0.5 - 0.2,
-    (rng() - 0.5) * radius * 0.3,
+    towerZ,
   );
   // Slight ruined lean
   tower.rotation.x = (rng() - 0.5) * 0.08;
@@ -346,6 +556,56 @@ function buildFortressIsland(rng: () => number, radius: number): THREE.Group {
     );
     battlement.rotation.y = bAngle;
     group.add(battlement);
+  }
+
+  // Torch on tower top: orange emissive sphere + PointLight
+  const torchGeo = new THREE.SphereGeometry(0.12, 5, 4);
+  const torchMat = new THREE.MeshBasicMaterial({ color: 0xff8833 });
+  const torch = new THREE.Mesh(torchGeo, torchMat);
+  const torchY = tower.position.y + towerHeight * 0.5 + 0.3;
+  torch.position.set(towerX, torchY, towerZ);
+  group.add(torch);
+
+  const torchLight = new THREE.PointLight(0xff6622, 0.6, 10);
+  torchLight.position.set(towerX, torchY, towerZ);
+  group.add(torchLight);
+
+  // Tattered flag on tower using animated flag material
+  const flagGeo = new THREE.PlaneGeometry(0.6, 0.35, 6, 4);
+  const flagMat = createFlagMaterial(COLORS.fortBrick);
+  const flag = new THREE.Mesh(flagGeo, flagMat);
+  flag.position.set(
+    towerX + 0.35,
+    tower.position.y + towerHeight * 0.5 + 0.15,
+    towerZ,
+  );
+  flag.name = 'flag';
+  group.add(flag);
+
+  // Dock: elongated box extending from island edge over water
+  const dockAngle = rng() * Math.PI * 2;
+  const dockGeo = new THREE.BoxGeometry(0.6, 0.12, 2.5);
+  const dockMat = new THREE.MeshToonMaterial({ color: COLORS.palmTrunk });
+  const dock = new THREE.Mesh(dockGeo, dockMat);
+  dock.position.set(
+    Math.cos(dockAngle) * (radius * 0.9 + 1.0),
+    baseHeight * 0.3,
+    Math.sin(dockAngle) * (radius * 0.9 + 1.0),
+  );
+  dock.rotation.y = dockAngle;
+  group.add(dock);
+
+  // Dock posts
+  for (const side of [-0.25, 0.25]) {
+    for (const along of [-0.8, 0.8]) {
+      const postGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.6, 4);
+      const postMat = new THREE.MeshToonMaterial({ color: COLORS.palmTrunk });
+      const post = new THREE.Mesh(postGeo, postMat);
+      const postX = Math.cos(dockAngle) * (radius * 0.9 + 1.0 + along) - Math.sin(dockAngle) * side;
+      const postZ = Math.sin(dockAngle) * (radius * 0.9 + 1.0 + along) + Math.cos(dockAngle) * side;
+      post.position.set(postX, baseHeight * 0.1, postZ);
+      group.add(post);
+    }
   }
 
   // Rubble: scattered small boxes
@@ -481,7 +741,7 @@ export class WorldSystem {
 
       const island: Island = {
         type,
-        pos: new THREE.Vector3(px, 0, pz),
+        pos: new THREE.Vector3(px, ISLAND_BASE_Y, pz),
         radius,
         reefRadius,
         hasTreasure,
@@ -592,6 +852,25 @@ export class WorldSystem {
 
   collectTreasure(island: Island): void {
     island.treasureCollected = true;
+  }
+
+  // ---------------------------------------------------------------
+  //  Update animated elements (fortress flags)
+  // ---------------------------------------------------------------
+
+  updateAnimations(time: number, windStrength: number): void {
+    for (const island of this.islands) {
+      if (!island.meshGroup || island.type !== 'fortress') continue;
+      island.meshGroup.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material instanceof THREE.ShaderMaterial) {
+          const u = child.material.uniforms;
+          if (u.uTime !== undefined) {
+            u.uTime.value = time;
+            if (u.uWindStrength !== undefined) u.uWindStrength.value = windStrength;
+          }
+        }
+      });
+    }
   }
 
   // ---------------------------------------------------------------

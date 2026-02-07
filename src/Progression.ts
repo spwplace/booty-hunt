@@ -401,7 +401,7 @@ const UPGRADE_POOL: Upgrade[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Weather schedule helpers (used for endless mode beyond wave 12)
+// Weather schedule helpers (used for endless mode beyond the final wave)
 // ---------------------------------------------------------------------------
 
 const WEATHER_CYCLE: WeatherState[] = [
@@ -649,7 +649,7 @@ const WEAPON_UPGRADES = new Set([
 // Victory constants
 // ---------------------------------------------------------------------------
 
-const FINAL_WAVE = 12;
+const FINAL_WAVE = 5;
 
 // ---------------------------------------------------------------------------
 // ProgressionSystem
@@ -867,6 +867,30 @@ export class ProgressionSystem {
     return { ...this.metaStats };
   }
 
+  // -----------------------------------------------------------------------
+  // Dev-only setters (for DevPanel)
+  // -----------------------------------------------------------------------
+
+  devSetHealth(value: number): void {
+    this.stats.health = Math.max(0, Math.min(value, this.stats.maxHealth));
+  }
+
+  devSetScore(value: number): void {
+    this.score = Math.max(0, value);
+  }
+
+  devSetWave(value: number): void {
+    this.wave = Math.max(1, value);
+  }
+
+  devSetMaxSpeed(value: number): void {
+    this.stats.maxSpeed = Math.max(1, value);
+  }
+
+  devSetCannonDamage(value: number): void {
+    this.stats.cannonDamage = Math.max(0.1, value);
+  }
+
   getMetaStatsV1(): SaveDataV1 {
     return { ...this.metaStatsV1 };
   }
@@ -946,19 +970,19 @@ export class ProgressionSystem {
       return { ...WAVE_TABLE[w - 1] };
     }
 
-    // Endless mode: generate scaling config beyond wave 12
+    // Endless mode: generate scaling config beyond the final wave
     const endlessWave = w - FINAL_WAVE;
     return {
       wave: w,
-      totalShips: Math.min(14 + endlessWave, 20),
-      armedPercent: Math.min(0.75 + endlessWave * 0.02, 0.90),
-      speedMultiplier: 1.66 + endlessWave * 0.08,
-      healthMultiplier: 1.88 + endlessWave * 0.12,
+      totalShips: Math.min(8 + endlessWave * 2, 20),
+      armedPercent: Math.min(0.60 + endlessWave * 0.05, 0.90),
+      speedMultiplier: 1.50 + endlessWave * 0.10,
+      healthMultiplier: 1.70 + endlessWave * 0.15,
       weather: weatherForWave(w),
       enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],
-      bossName: w % 5 === 0 ? 'Endless Dread' : null,
-      bossHp: w % 5 === 0 ? 800 + endlessWave * 100 : 0,
-      isPortWave: (w - FINAL_WAVE) % 3 === 0,
+      bossName: endlessWave % 3 === 0 ? 'Endless Dread' : null,
+      bossHp: endlessWave % 3 === 0 ? 500 + endlessWave * 100 : 0,
+      isPortWave: endlessWave % 2 === 0,
       specialEvent: null,
     };
   }
@@ -981,13 +1005,11 @@ export class ProgressionSystem {
   // -----------------------------------------------------------------------
 
   /**
-   * Check if the player has achieved victory (completed wave 12).
-   * Returns true after wave 12 is complete.
+   * Check if the player has achieved victory (completed all waves).
    */
   checkVictory(wave?: number): boolean {
     const w = wave ?? this.wave;
-    // Victory happens when wave 12 is completed (state transitions after it)
-    // We check the completed wave count in run stats
+    // Victory happens when the final wave is completed
     return this.runStats.wavesCompleted >= FINAL_WAVE;
   }
 
@@ -1067,7 +1089,7 @@ export class ProgressionSystem {
       // Endless mode unlock: first victory
       if (!this.metaStatsV1.endlessModeUnlocked && this.metaStatsV1.victories >= 1) {
         this.metaStatsV1.endlessModeUnlocked = true;
-        unlocks.push('Endless Mode unlocked! Sail beyond wave 12.');
+        unlocks.push('Endless Mode unlocked! Sail beyond the final wave.');
       }
 
       // Bosun/Quartermaster unlock: victory with 2 different ship classes
@@ -1183,7 +1205,7 @@ export class ProgressionSystem {
    */
   getUpgradeChoices(): Upgrade[] {
     const earlyLegendary = this.hasMetaBonus('early_legendary');
-    const legendaryAllowed = earlyLegendary || this.wave >= 5;
+    const legendaryAllowed = earlyLegendary || this.wave >= 3;
 
     // Build available pool excluding already acquired
     const acquired = new Set(this.acquiredUpgradeIds);
@@ -1486,14 +1508,6 @@ export class ProgressionSystem {
     return false;
   }
 
-  /**
-   * Roll based on the current wave's armedPercent.
-   * Call once per merchant spawn to decide if it should be armed.
-   */
-  isArmedShip(): boolean {
-    const config = this.currentWaveConfig ?? this.getWaveConfig();
-    return Math.random() < config.armedPercent;
-  }
 
   // -----------------------------------------------------------------------
   // Score & meta gold

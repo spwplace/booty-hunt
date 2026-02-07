@@ -737,7 +737,7 @@ export class EnemyAISystem {
 
     return {
       speed,
-      baseSpeed: speed,
+      baseSpeed,
       hp,
       maxHp: hp,
       armed: config.armed || isBoss,

@@ -62,6 +62,7 @@ const GRAPESHOT_SPREAD = 2.5;
 const IRON_COLOR = 0x333333;
 const HOT_IRON_COLOR = new THREE.Color(0xff6622);
 const COLD_IRON_COLOR = new THREE.Color(IRON_COLOR);
+const AOE_GLOW_COLOR = new THREE.Color(0x22aaff);
 
 // ---------------------------------------------------------------------------
 //  CombatSystem
@@ -456,7 +457,7 @@ export class CombatSystem {
 
       if (b.isAoE) {
         // Neptune's Wrath AoE shots glow blue-green
-        const aoEColor = new THREE.Color(0x22aaff);
+        const aoEColor = AOE_GLOW_COLOR;
         r = COLD_IRON_COLOR.r + (aoEColor.r - COLD_IRON_COLOR.r) * glowT;
         g = COLD_IRON_COLOR.g + (aoEColor.g - COLD_IRON_COLOR.g) * glowT;
         bl = COLD_IRON_COLOR.b + (aoEColor.b - COLD_IRON_COLOR.b) * glowT;

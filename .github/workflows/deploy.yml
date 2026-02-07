@@ -21,12 +21,37 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+
+      # Build latest from dev branch
       - run: npm ci
       - run: npm run build
+      - run: mv dist latest-build
+
+      # Build each versioned tag
+      - name: Build historical versions
+        run: |
+          for tag in $(git tag -l 'v*' | sort -V); do
+            echo "::group::Building $tag"
+            git checkout "$tag"
+            npm ci
+            npx vite build --base './' --outDir "build-$tag"
+            echo "::endgroup::"
+          done
+
+      # Assemble: latest at root, each tag in its own subdir
+      - name: Assemble site
+        run: |
+          mv latest-build dist
+          for tag in $(git tag -l 'v*' | sort -V); do
+            mv "build-$tag" "dist/$tag"
+          done
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

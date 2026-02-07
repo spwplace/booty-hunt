@@ -620,6 +620,7 @@ export class EventSystem {
   }
 
   reset(): void {
+    if (this.currentEvent) this.endCurrentEvent();
     this.currentEvent = null;
     this.eventCooldown = 10; // short initial cooldown at game start
     this.treasureMapActive = false;
