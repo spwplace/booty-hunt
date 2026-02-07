@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Booty Hunt</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Pirata+One&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #080818; cursor: crosshair; }
+    #game { width: 100vw; height: 100vh; }
+    canvas { display: block; }
+
+    #ui {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      font-family: 'Pirata One', cursive, serif;
+    }
+
+    /* ---- Title Screen ---- */
+    #title {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      transition: opacity 1.2s ease-out;
+      z-index: 10;
+    }
+    #title h1 {
+      font-size: clamp(3rem, 10vw, 7rem);
+      color: #FFD700;
+      text-shadow:
+        0 0 30px rgba(255, 200, 0, 0.4),
+        4px 4px 0 #5a2d0c,
+        -2px -2px 0 #5a2d0c;
+      letter-spacing: 0.08em;
+    }
+    #title .subtitle {
+      color: #ccc;
+      font-size: clamp(1rem, 3vw, 1.6rem);
+      margin-top: 0.8rem;
+      opacity: 0.85;
+    }
+    #title .hint {
+      color: #999;
+      font-size: clamp(0.8rem, 2vw, 1rem);
+      margin-top: 2.5rem;
+      opacity: 0.5;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 0.7; }
+    }
+
+    /* ---- Score ---- */
+    #score {
+      position: absolute;
+      top: 24px; left: 28px;
+      color: #FFD700;
+      font-size: 2rem;
+      text-shadow: 2px 2px 0 #000, 0 0 10px rgba(255, 200, 0, 0.2);
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+    #score .label { color: #c9a84c; font-size: 1rem; display: block; }
+
+    /* ---- Compass ---- */
+    #compass-container {
+      position: absolute;
+      bottom: 32px; right: 32px;
+      width: 110px; height: 110px;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+    .compass-ring {
+      width: 100%; height: 100%;
+      border: 3px solid rgba(255, 215, 0, 0.5);
+      border-radius: 50%;
+      position: relative;
+      background: rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    .compass-center {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 8px; height: 8px;
+      background: #FFD700;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+    }
+    #compass-arrow {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 0; height: 0;
+      transform-origin: 0 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 42px solid #e04040;
+      transform: translate(-50%, 0) rotate(0deg);
+      filter: drop-shadow(0 0 4px rgba(224, 64, 64, 0.5));
+      transition: transform 0.15s ease-out;
+    }
+    .compass-label {
+      position: absolute;
+      color: rgba(255, 215, 0, 0.6);
+      font-size: 0.65rem;
+      font-family: 'Pirata One', cursive;
+    }
+    .compass-n { top: 6px; left: 50%; transform: translateX(-50%); }
+    .compass-s { bottom: 6px; left: 50%; transform: translateX(-50%); }
+    .compass-e { right: 8px; top: 50%; transform: translateY(-50%); }
+    .compass-w { left: 8px; top: 50%; transform: translateY(-50%); }
+
+    /* ---- Distance ---- */
+    #distance {
+      position: absolute;
+      bottom: 148px; right: 32px;
+      width: 110px;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 0.95rem;
+      font-family: 'Pirata One', cursive;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+
+    /* ---- Capture Popup ---- */
+    #capture-text {
+      position: absolute;
+      top: 38%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 3.5rem;
+      color: #FFD700;
+      text-shadow: 3px 3px 0 #000, 0 0 30px rgba(255, 200, 0, 0.5);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.4s, transform 0.4s;
+    }
+    #capture-text.show {
+      opacity: 1;
+      transform: translate(-50%, -60%) scale(1.1);
+    }
+
+    /* ---- Spyglass Vignette ---- */
+    #spyglass-vignette {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      border-radius: 50%;
+      box-shadow: inset 0 0 100px 60px rgba(0, 0, 0, 0);
+      transition: box-shadow 0.4s;
+      z-index: 5;
+    }
+    #spyglass-vignette.active {
+      box-shadow: inset 0 0 200px 150px rgba(0, 0, 0, 0.85);
+    }
+
+    /* ---- Controls hint ---- */
+    #controls {
+      position: absolute;
+      bottom: 28px; left: 28px;
+      color: rgba(255, 255, 255, 0.35);
+      font-family: 'Pirata One', cursive;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="ui">
+    <div id="title">
+      <h1>Booty Hunt</h1>
+      <p class="subtitle">The ocean be vast... but so be yer greed</p>
+      <p class="hint">Press any key to set sail</p>
+    </div>
+    <div id="score"><span class="label">Gold Plundered</span>0</div>
+    <div id="compass-container">
+      <div class="compass-ring">
+        <span class="compass-label compass-n">N</span>
+        <span class="compass-label compass-s">S</span>
+        <span class="compass-label compass-e">E</span>
+        <span class="compass-label compass-w">W</span>
+        <div class="compass-center"></div>
+        <div id="compass-arrow"></div>
+      </div>
+    </div>
+    <div id="distance"></div>
+    <div id="capture-text"></div>
+    <div id="spyglass-vignette"></div>
+    <div id="controls">
+      WASD - Sail<br/>
+      SPACE - Spyglass
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
