@@ -1227,21 +1227,23 @@ function updateCamera(dt: number) {
   const spyFwd = spyglassAmount * 14;
   const spyUp = spyglassAmount * 4;
 
-  const behind = new THREE.Vector3(
-    -Math.sin(playerAngle) * (distBehind - spyFwd),
-    camHeight + spyUp,
-    -Math.cos(playerAngle) * (distBehind - spyFwd),
+  // Reuse module-level temp vectors to avoid per-frame allocations
+  const behindDist = distBehind - spyFwd;
+  _camTmpA.set(
+    playerPos.x - Math.sin(playerAngle) * behindDist,
+    playerPos.y + camHeight + spyUp,
+    playerPos.z - Math.cos(playerAngle) * behindDist,
   );
-  const target = playerPos.clone().add(behind);
-  camPos.lerp(target, 1 - Math.exp(-3.5 * dt));
+  camPos.lerp(_camTmpA, 1 - Math.exp(-3.5 * dt));
   camera.position.copy(camPos).add(screenShake.offset);
 
   const lookAheadDist = spyglassAmount * 60;
-  const lookTarget = playerPos.clone().add(new THREE.Vector3(
-    Math.sin(playerAngle) * lookAheadDist, 0,
-    Math.cos(playerAngle) * lookAheadDist,
-  ));
-  camLookAt.lerp(lookTarget, 1 - Math.exp(-5 * dt));
+  _camTmpA.set(
+    playerPos.x + Math.sin(playerAngle) * lookAheadDist,
+    playerPos.y,
+    playerPos.z + Math.cos(playerAngle) * lookAheadDist,
+  );
+  camLookAt.lerp(_camTmpA, 1 - Math.exp(-5 * dt));
   camera.lookAt(camLookAt);
 
   const baseFov = THREE.MathUtils.lerp(56, 68, speedRatio);
@@ -1258,6 +1260,7 @@ function updateCamera(dt: number) {
 const _tmpVec3A = new THREE.Vector3();
 const _tmpVec3B = new THREE.Vector3();
 const _tmpVec3C = new THREE.Vector3();
+const _camTmpA = new THREE.Vector3();
 
 // ===================================================================
 //  Ship wave-tilt helper
