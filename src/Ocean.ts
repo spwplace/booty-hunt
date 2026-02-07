@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+const MAX_REEFS = 16;
+
 const vertexShader = /* glsl */ `
   uniform float uTime;
   uniform float uWaveScale;
@@ -55,6 +57,8 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uSunDir;
   uniform vec3 uFogColor;
   uniform float uFogDensity;
+  uniform vec4 uReefPositions[${MAX_REEFS}];
+  uniform int uReefCount;
   varying vec3 vWorldPos;
   varying float vElevation;
   varying float vFogDepth;
@@ -85,6 +89,43 @@ const fragmentShader = /* glsl */ `
       a *= 0.45;
     }
     return v;
+  }
+
+  // ---- Reef foam calculation ----
+  float reefFoam(vec2 worldXZ) {
+    float totalFoam = 0.0;
+    for (int i = 0; i < ${MAX_REEFS}; i++) {
+      if (i >= uReefCount) break;
+      vec4 reef = uReefPositions[i];
+      vec2 reefCenter = reef.xz;
+      float reefRadius = reef.w;
+
+      vec2 delta = worldXZ - reefCenter;
+      float dist = length(delta);
+
+      // Foam ring near the reef radius edge (outer ring of breaking waves)
+      float ringDist = abs(dist - reefRadius);
+      float ringFoam = smoothstep(3.0, 0.0, ringDist);
+
+      // Inner reef shallows foam (sparser, within the reef)
+      float innerFoam = smoothstep(reefRadius, reefRadius * 0.4, dist) * 0.4;
+
+      // Animated foam noise for natural look
+      vec2 foamUV = worldXZ * 0.35 + uTime * vec2(0.08, 0.06);
+      float noise1 = fbm(foamUV);
+      float noise2 = fbm(worldXZ * 0.5 - uTime * vec2(0.05, 0.1));
+
+      // Combine: outer ring is strong breaking waves, inner is gentle
+      float foam = ringFoam * smoothstep(0.3, 0.6, noise1);
+      foam += innerFoam * smoothstep(0.4, 0.7, noise2);
+
+      // Animated shimmer on the ring
+      float shimmer = sin(dist * 2.5 - uTime * 2.0) * 0.5 + 0.5;
+      foam *= 0.7 + shimmer * 0.3;
+
+      totalFoam = max(totalFoam, foam);
+    }
+    return clamp(totalFoam, 0.0, 1.0);
   }
 
   void main() {
@@ -138,6 +179,13 @@ const fragmentShader = /* glsl */ `
     foamMask = max(foamMask, foamEdge * 0.4);
     vec3 foam = vec3(0.82, 0.90, 0.95);
     color = mix(color, foam, foamMask * 0.7);
+
+    // ---- Reef foam overlay ----
+    if (uReefCount > 0) {
+      float rFoam = reefFoam(vWorldPos.xz);
+      vec3 reefFoamColor = vec3(0.88, 0.94, 0.98);
+      color = mix(color, reefFoamColor, rFoam * 0.75);
+    }
 
     // ---- Specular: sun streak ----
     vec3 H = normalize(L + V);
@@ -200,6 +248,12 @@ export class Ocean {
     geo.rotateX(-Math.PI / 2);
     const nonIndexed = geo.toNonIndexed();
 
+    // Initialize reef uniform arrays
+    const reefPositions: THREE.Vector4[] = [];
+    for (let i = 0; i < MAX_REEFS; i++) {
+      reefPositions.push(new THREE.Vector4(0, 0, 0, 0));
+    }
+
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
@@ -207,6 +261,8 @@ export class Ocean {
         uFogColor: { value: fogColor },
         uFogDensity: { value: fogDensity },
         uWaveScale: { value: 1.0 },
+        uReefPositions: { value: reefPositions },
+        uReefCount: { value: 0 },
       },
       vertexShader,
       fragmentShader,
@@ -235,6 +291,23 @@ export class Ocean {
 
   setWaveScale(scale: number) {
     this.material.uniforms.uWaveScale.value = scale;
+  }
+
+  /** Update reef positions for the foam shader effect. */
+  setReefPositions(positions: { x: number; z: number; radius: number }[]): void {
+    const reefs = this.material.uniforms.uReefPositions.value as THREE.Vector4[];
+    const count = Math.min(positions.length, MAX_REEFS);
+
+    for (let i = 0; i < MAX_REEFS; i++) {
+      if (i < count) {
+        const p = positions[i];
+        reefs[i].set(p.x, 0, p.z, p.radius);
+      } else {
+        reefs[i].set(0, 0, 0, 0);
+      }
+    }
+
+    this.material.uniforms.uReefCount.value = count;
   }
 
   /** Wave height + surface slope at a world-space coordinate. */

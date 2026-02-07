@@ -10,6 +10,7 @@ export class PortScene {
   private smokeDummy = new THREE.Object3D();
   private chimneyTop = new THREE.Vector3();
   private smokeTimer = 0;
+  private tavernSignPos = new THREE.Vector3();
 
   constructor() {
     this.group = new THREE.Group();
@@ -80,6 +81,40 @@ export class PortScene {
     chimney.position.set(-5.5, 5.8, -14);
     this.group.add(chimney);
     this.chimneyTop.set(-5.5, 6.8, -14);
+
+    // --- Tavern Sign (crew hiring indicator) ---
+    const signPostGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.4, 6);
+    const signPostMat = new THREE.MeshToonMaterial({ color: 0x3a2a1a });
+    const signPost = new THREE.Mesh(signPostGeo, signPostMat);
+    signPost.position.set(-1.5, 3.2, -11.5);
+    this.group.add(signPost);
+
+    // Sign board
+    const signBoardGeo = new THREE.BoxGeometry(1.8, 0.8, 0.08);
+    const signBoardMat = new THREE.MeshToonMaterial({ color: 0x5a3a1a });
+    const signBoard = new THREE.Mesh(signBoardGeo, signBoardMat);
+    signBoard.position.set(-1.5, 4.2, -11.5);
+    this.group.add(signBoard);
+
+    // Sign board frame (gold border effect)
+    const signFrameGeo = new THREE.BoxGeometry(1.9, 0.9, 0.06);
+    const signFrameMat = new THREE.MeshToonMaterial({ color: 0xc9a84c });
+    const signFrame = new THREE.Mesh(signFrameGeo, signFrameMat);
+    signFrame.position.set(-1.5, 4.2, -11.48);
+    this.group.add(signFrame);
+
+    // Hanging bracket (small horizontal bar from post to sign)
+    const bracketGeo = new THREE.BoxGeometry(0.6, 0.06, 0.06);
+    const bracket = new THREE.Mesh(bracketGeo, signPostMat);
+    bracket.position.set(-1.2, 4.35, -11.5);
+    this.group.add(bracket);
+
+    // Tavern lamp (warm glow beneath sign)
+    const tavernLamp = new THREE.PointLight(0xffaa44, 0.8, 8);
+    tavernLamp.position.set(-1.5, 3.8, -11.2);
+    this.group.add(tavernLamp);
+
+    this.tavernSignPos.set(-1.5, 4.2, -11.5);
 
     // --- Warehouse (building 2) ---
     const warehouseGeo = new THREE.BoxGeometry(5, 5, 8);
@@ -253,6 +288,14 @@ export class PortScene {
       this.smokeMesh.setMatrixAt(i, this.smokeDummy.matrix);
     }
     this.smokeMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** World position of the tavern sign, useful for camera positioning when hiring crew. */
+  getCrewHirePosition(): THREE.Vector3 {
+    // Return a copy offset to world space via group
+    const worldPos = this.tavernSignPos.clone();
+    this.group.localToWorld(worldPos);
+    return worldPos;
   }
 
   dispose(scene: THREE.Scene): void {

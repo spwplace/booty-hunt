@@ -1,4 +1,12 @@
 import type { WeatherState } from './Weather';
+import type {
+  ShipClass,
+  CrewBonus,
+  RunStats,
+  WaveConfigV1,
+  SaveDataV1,
+} from './Types';
+import { SHIP_CLASS_CONFIGS, WAVE_TABLE } from './Types';
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -66,6 +74,10 @@ export interface PlayerStats {
   hpRegenPerWave?: number;
   /** Immunity to storm speed penalty (from Ghost Captain synergy) */
   stormImmunity?: boolean;
+  /** Cannons per side (set by ship class) */
+  cannonsPerSide?: number;
+  /** Dodge bonus from ship class */
+  shipDodgeBonus?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +401,7 @@ const UPGRADE_POOL: Upgrade[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Weather schedule helpers
+// Weather schedule helpers (used for endless mode beyond wave 12)
 // ---------------------------------------------------------------------------
 
 const WEATHER_CYCLE: WeatherState[] = [
@@ -425,6 +437,7 @@ function weatherForWave(wave: number): WeatherState {
 
 const SAVE_KEY = 'booty-hunt-save';
 
+/** Legacy save data (kept for backward compatibility in loadSave) */
 interface SaveData {
   highScore: number;
   highWave: number;
@@ -449,7 +462,7 @@ const META_UNLOCKS: MetaUnlock[] = [
   { id: 'golden_hull', cost: 15000, description: 'Cosmetic golden hull' },
 ];
 
-function createDefaultSave(): SaveData {
+function createDefaultSaveV1(): SaveDataV1 {
   return {
     highScore: 0,
     highWave: 0,
@@ -458,14 +471,25 @@ function createDefaultSave(): SaveData {
     totalWaves: 0,
     bestCombo: 0,
     unlockedBonuses: [],
+    victories: 0,
+    victoryClasses: [],
+    galleonUnlocked: false,
+    bosunUnlocked: false,
+    quartermasterUnlocked: false,
+    endlessModeUnlocked: false,
+    tutorialCompleted: false,
+    masterVolume: 1,
+    musicVolume: 0.7,
+    sfxVolume: 1,
+    graphicsQuality: 'high',
   };
 }
 
-function loadSave(): SaveData {
+function loadSaveV1(): SaveDataV1 {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
-      const data = JSON.parse(raw) as Partial<SaveData>;
+      const data = JSON.parse(raw) as Partial<SaveDataV1>;
       return {
         highScore: data.highScore ?? 0,
         highWave: data.highWave ?? 0,
@@ -474,20 +498,58 @@ function loadSave(): SaveData {
         totalWaves: data.totalWaves ?? 0,
         bestCombo: data.bestCombo ?? 0,
         unlockedBonuses: data.unlockedBonuses ?? [],
+        victories: data.victories ?? 0,
+        victoryClasses: data.victoryClasses ?? [],
+        galleonUnlocked: data.galleonUnlocked ?? false,
+        bosunUnlocked: data.bosunUnlocked ?? false,
+        quartermasterUnlocked: data.quartermasterUnlocked ?? false,
+        endlessModeUnlocked: data.endlessModeUnlocked ?? false,
+        tutorialCompleted: data.tutorialCompleted ?? false,
+        masterVolume: data.masterVolume ?? 1,
+        musicVolume: data.musicVolume ?? 0.7,
+        sfxVolume: data.sfxVolume ?? 1,
+        graphicsQuality: data.graphicsQuality ?? 'high',
       };
     }
   } catch {
     // corrupted save -- ignore
   }
-  return createDefaultSave();
+  return createDefaultSaveV1();
 }
 
-function writeSave(data: SaveData): void {
+function writeSaveV1(data: SaveDataV1): void {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(data));
   } catch {
     // storage full or unavailable -- swallow
   }
+}
+
+// Keep legacy aliases for backward compat within this file
+function loadSave(): SaveData {
+  const v1 = loadSaveV1();
+  return {
+    highScore: v1.highScore,
+    highWave: v1.highWave,
+    totalGold: v1.totalGold,
+    totalShips: v1.totalShips,
+    totalWaves: v1.totalWaves,
+    bestCombo: v1.bestCombo,
+    unlockedBonuses: v1.unlockedBonuses,
+  };
+}
+
+function writeSave(data: SaveData): void {
+  // Merge legacy save fields into the full V1 save
+  const current = loadSaveV1();
+  current.highScore = data.highScore;
+  current.highWave = data.highWave;
+  current.totalGold = data.totalGold;
+  current.totalShips = data.totalShips;
+  current.totalWaves = data.totalWaves;
+  current.bestCombo = data.bestCombo;
+  current.unlockedBonuses = data.unlockedBonuses;
+  writeSaveV1(current);
 }
 
 // ---------------------------------------------------------------------------
@@ -532,6 +594,29 @@ function createDefaultStats(): PlayerStats {
     steadyHandsSpread: 1,
     hpRegenPerWave: 0,
     stormImmunity: false,
+    cannonsPerSide: 3,
+    shipDodgeBonus: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Default run stats factory
+// ---------------------------------------------------------------------------
+
+function createDefaultRunStats(shipClass: ShipClass): RunStats {
+  return {
+    gold: 0,
+    shipsDestroyed: 0,
+    wavesCompleted: 0,
+    maxCombo: 0,
+    damageDealt: 0,
+    damageTaken: 0,
+    eventsCompleted: 0,
+    treasuresFound: 0,
+    crewHired: 0,
+    timePlayed: 0,
+    shipClass,
+    victory: false,
   };
 }
 
@@ -561,6 +646,12 @@ const WEAPON_UPGRADES = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// Victory constants
+// ---------------------------------------------------------------------------
+
+const FINAL_WAVE = 12;
+
+// ---------------------------------------------------------------------------
 // ProgressionSystem
 // ---------------------------------------------------------------------------
 
@@ -581,6 +672,18 @@ export class ProgressionSystem {
   private acquiredUpgradeIds: string[];
   private activeSynergies: string[];
   private metaStats: SaveData;
+  private metaStatsV1: SaveDataV1;
+
+  // Ship class for current run
+  private shipClass: ShipClass;
+  private upgradeBonus: number;
+
+  // Run stats tracking
+  private runStats: RunStats;
+  private runStartTime: number;
+
+  // Endless mode flag
+  private endlessMode: boolean;
 
   constructor() {
     this.stats = createDefaultStats();
@@ -594,13 +697,106 @@ export class ProgressionSystem {
     this.acquiredUpgradeIds = [];
     this.activeSynergies = [];
 
-    const save = loadSave();
-    this.highScore = save.highScore;
-    this.highWave = save.highWave;
-    this.metaStats = save;
+    this.shipClass = 'brigantine';
+    this.upgradeBonus = 0;
+    this.endlessMode = false;
+
+    const saveV1 = loadSaveV1();
+    this.metaStatsV1 = saveV1;
+    this.metaStats = {
+      highScore: saveV1.highScore,
+      highWave: saveV1.highWave,
+      totalGold: saveV1.totalGold,
+      totalShips: saveV1.totalShips,
+      totalWaves: saveV1.totalWaves,
+      bestCombo: saveV1.bestCombo,
+      unlockedBonuses: saveV1.unlockedBonuses,
+    };
+    this.highScore = saveV1.highScore;
+    this.highWave = saveV1.highWave;
+
+    this.runStats = createDefaultRunStats(this.shipClass);
+    this.runStartTime = Date.now();
 
     // Apply any meta-persistence bonuses on construction
     this.applyMetaBonuses();
+  }
+
+  // -----------------------------------------------------------------------
+  // Ship Class Integration
+  // -----------------------------------------------------------------------
+
+  /**
+   * Initialize stats based on the selected ship class.
+   * Should be called at the start of a new run before beginWave().
+   */
+  initializeStats(shipClass: ShipClass = 'brigantine'): void {
+    this.shipClass = shipClass;
+    this.stats = createDefaultStats();
+
+    const config = SHIP_CLASS_CONFIGS[shipClass];
+
+    // Apply ship class base stats
+    this.stats.maxSpeed = config.speed;
+    this.stats.maxHealth = config.hp;
+    this.stats.health = config.hp;
+    this.stats.captureRange = config.captureRange;
+    this.stats.cannonsPerSide = config.cannonsPerSide;
+    this.stats.cannonDamage = 1.0 + config.damageBonus;
+    this.stats.shipDodgeBonus = config.dodgeBonus;
+
+    // Sloop dodge bonus stacks with ghost sails
+    if (config.dodgeBonus > 0) {
+      this.stats.ghostDodgeChance = (this.stats.ghostDodgeChance ?? 0) + config.dodgeBonus;
+    }
+
+    // Store upgrade bonus for later use when applying upgrades
+    this.upgradeBonus = config.upgradeBonus;
+
+    // Reset run stats for new ship class
+    this.runStats = createDefaultRunStats(shipClass);
+    this.runStartTime = Date.now();
+
+    // Re-apply meta bonuses on top of ship class stats
+    this.applyMetaBonuses();
+  }
+
+  /** Get the current ship class */
+  getShipClass(): ShipClass {
+    return this.shipClass;
+  }
+
+  /** Get the upgrade bonus multiplier for the current ship class */
+  getUpgradeBonus(): number {
+    return this.upgradeBonus;
+  }
+
+  // -----------------------------------------------------------------------
+  // Crew Bonus Integration
+  // -----------------------------------------------------------------------
+
+  /**
+   * Apply crew bonuses to player stats. Call this whenever crew changes
+   * or at the start of each wave.
+   *
+   * This applies bonuses on top of the current stats (multiplicative for
+   * mults, additive for flat). The caller should ensure this is called
+   * after initializeStats() and after upgrades are applied.
+   */
+  applyCrewBonuses(bonuses: CrewBonus): void {
+    this.stats.maxSpeed *= bonuses.speedMult;
+    this.stats.cannonDamage *= bonuses.damageMult;
+    this.stats.lookoutEyeRange = (this.stats.lookoutEyeRange ?? 1) * bonuses.visionMult;
+    this.stats.goldMultiplier = (this.stats.goldMultiplier ?? 1) * bonuses.goldMult;
+
+    // Flat bonuses
+    if (bonuses.maxHpBonus > 0) {
+      this.stats.maxHealth += bonuses.maxHpBonus;
+      this.stats.health = Math.min(this.stats.health + bonuses.maxHpBonus, this.stats.maxHealth);
+    }
+    if (bonuses.hpRegen > 0) {
+      this.stats.hpRegenPerWave = (this.stats.hpRegenPerWave ?? 0) + bonuses.hpRegen;
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -671,6 +867,10 @@ export class ProgressionSystem {
     return { ...this.metaStats };
   }
 
+  getMetaStatsV1(): SaveDataV1 {
+    return { ...this.metaStatsV1 };
+  }
+
   hasMetaBonus(id: string): boolean {
     return this.metaStats.unlockedBonuses.includes(id);
   }
@@ -702,25 +902,226 @@ export class ProgressionSystem {
     return Math.min(count, 3);
   }
 
-  /** True if current wave is a boss wave (every 5th wave) */
+  /** True if current wave is a boss wave (uses WAVE_TABLE or every 5th in endless) */
   isBossWave(): boolean {
+    if (this.wave <= FINAL_WAVE) {
+      const entry = WAVE_TABLE[this.wave - 1];
+      return entry.bossName !== null;
+    }
+    // Endless mode: boss every 5th wave past 12
     return this.wave % 5 === 0;
   }
 
+  /** True if current wave is a port wave (from WAVE_TABLE) */
+  isPortWave(): boolean {
+    if (this.wave <= FINAL_WAVE) {
+      return WAVE_TABLE[this.wave - 1].isPortWave;
+    }
+    // Endless mode: port every 3rd wave
+    return (this.wave - FINAL_WAVE) % 3 === 0;
+  }
+
+  /** Check if endless mode is active */
+  isEndlessMode(): boolean {
+    return this.endlessMode;
+  }
+
+  /** Set endless mode */
+  setEndlessMode(enabled: boolean): void {
+    this.endlessMode = enabled;
+  }
+
   // -----------------------------------------------------------------------
-  // Wave configuration
+  // Wave configuration (now uses WAVE_TABLE for waves 1-12)
   // -----------------------------------------------------------------------
 
-  getWaveConfig(): WaveConfig {
-    const w = this.wave;
+  /**
+   * Get the WaveConfigV1 for a specific wave from the table.
+   * Returns the table entry for waves 1-12, or generates config for endless.
+   */
+  getWaveConfigV1(wave?: number): WaveConfigV1 {
+    const w = wave ?? this.wave;
+
+    if (w >= 1 && w <= FINAL_WAVE) {
+      return { ...WAVE_TABLE[w - 1] };
+    }
+
+    // Endless mode: generate scaling config beyond wave 12
+    const endlessWave = w - FINAL_WAVE;
     return {
       wave: w,
-      totalShips: Math.min(4 + w * 2, 14),
-      armedPercent: Math.min(0.15 + w * 0.10, 0.75),
-      speedMultiplier: 1.0 + w * 0.06,
-      healthMultiplier: 1.0 + w * 0.08,
+      totalShips: Math.min(14 + endlessWave, 20),
+      armedPercent: Math.min(0.75 + endlessWave * 0.02, 0.90),
+      speedMultiplier: 1.66 + endlessWave * 0.08,
+      healthMultiplier: 1.88 + endlessWave * 0.12,
       weather: weatherForWave(w),
+      enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],
+      bossName: w % 5 === 0 ? 'Endless Dread' : null,
+      bossHp: w % 5 === 0 ? 800 + endlessWave * 100 : 0,
+      isPortWave: (w - FINAL_WAVE) % 3 === 0,
+      specialEvent: null,
     };
+  }
+
+  /** Legacy getWaveConfig() -- returns the old WaveConfig format */
+  getWaveConfig(): WaveConfig {
+    const v1 = this.getWaveConfigV1();
+    return {
+      wave: v1.wave,
+      totalShips: v1.totalShips,
+      armedPercent: v1.armedPercent,
+      speedMultiplier: v1.speedMultiplier,
+      healthMultiplier: v1.healthMultiplier,
+      weather: v1.weather,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Victory condition
+  // -----------------------------------------------------------------------
+
+  /**
+   * Check if the player has achieved victory (completed wave 12).
+   * Returns true after wave 12 is complete.
+   */
+  checkVictory(wave?: number): boolean {
+    const w = wave ?? this.wave;
+    // Victory happens when wave 12 is completed (state transitions after it)
+    // We check the completed wave count in run stats
+    return this.runStats.wavesCompleted >= FINAL_WAVE;
+  }
+
+  // -----------------------------------------------------------------------
+  // Run Stats Tracking
+  // -----------------------------------------------------------------------
+
+  /** Get current run stats snapshot */
+  getRunStats(): RunStats {
+    // Update time played
+    this.runStats.timePlayed = (Date.now() - this.runStartTime) / 1000;
+    this.runStats.gold = this.score;
+    this.runStats.victory = this.checkVictory();
+    return { ...this.runStats };
+  }
+
+  /** Record damage dealt to enemies */
+  addDamageDealt(amount: number): void {
+    this.runStats.damageDealt += amount;
+  }
+
+  /** Record damage taken by the player */
+  addDamageTaken(amount: number): void {
+    this.runStats.damageTaken += amount;
+  }
+
+  /** Record an event completion */
+  addEventCompleted(): void {
+    this.runStats.eventsCompleted++;
+  }
+
+  /** Record a treasure found */
+  addTreasureFound(): void {
+    this.runStats.treasuresFound++;
+  }
+
+  /** Record a crew hire */
+  addCrewHired(): void {
+    this.runStats.crewHired++;
+  }
+
+  /** Update max combo in run stats */
+  updateRunCombo(combo: number): void {
+    if (combo > this.runStats.maxCombo) {
+      this.runStats.maxCombo = combo;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Meta-Progression Expansion (SaveDataV1)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Check what new unlocks the player earned from this run.
+   * Returns a list of unlock description strings.
+   */
+  checkUnlocks(runStats: RunStats): string[] {
+    const unlocks: string[] = [];
+
+    if (runStats.victory) {
+      // Track victory
+      this.metaStatsV1.victories++;
+
+      // Track victory class
+      if (!this.metaStatsV1.victoryClasses.includes(runStats.shipClass)) {
+        this.metaStatsV1.victoryClasses.push(runStats.shipClass);
+      }
+
+      const uniqueClasses = this.metaStatsV1.victoryClasses.length;
+
+      // Galleon unlock: first victory
+      if (!this.metaStatsV1.galleonUnlocked && this.metaStatsV1.victories >= 1) {
+        this.metaStatsV1.galleonUnlocked = true;
+        unlocks.push('Galleon unlocked! A mighty vessel of war.');
+      }
+
+      // Endless mode unlock: first victory
+      if (!this.metaStatsV1.endlessModeUnlocked && this.metaStatsV1.victories >= 1) {
+        this.metaStatsV1.endlessModeUnlocked = true;
+        unlocks.push('Endless Mode unlocked! Sail beyond wave 12.');
+      }
+
+      // Bosun/Quartermaster unlock: victory with 2 different ship classes
+      if (uniqueClasses >= 2) {
+        if (!this.metaStatsV1.bosunUnlocked) {
+          this.metaStatsV1.bosunUnlocked = true;
+          unlocks.push('Bosun crew role unlocked! +5 max HP per level.');
+        }
+        if (!this.metaStatsV1.quartermasterUnlocked) {
+          this.metaStatsV1.quartermasterUnlocked = true;
+          unlocks.push('Quartermaster crew role unlocked! +8% gold per level.');
+        }
+      }
+
+      // Sync changes back to legacy metaStats
+      this.syncV1ToLegacy();
+
+      // Persist
+      writeSaveV1(this.metaStatsV1);
+    }
+
+    return unlocks;
+  }
+
+  /**
+   * Apply saved settings and unlocks from a SaveDataV1 object.
+   */
+  applySaveData(data: SaveDataV1): void {
+    this.metaStatsV1 = { ...data };
+    this.syncV1ToLegacy();
+    this.highScore = data.highScore;
+    this.highWave = data.highWave;
+  }
+
+  /** Sync V1 data back to legacy SaveData fields */
+  private syncV1ToLegacy(): void {
+    this.metaStats.highScore = this.metaStatsV1.highScore;
+    this.metaStats.highWave = this.metaStatsV1.highWave;
+    this.metaStats.totalGold = this.metaStatsV1.totalGold;
+    this.metaStats.totalShips = this.metaStatsV1.totalShips;
+    this.metaStats.totalWaves = this.metaStatsV1.totalWaves;
+    this.metaStats.bestCombo = this.metaStatsV1.bestCombo;
+    this.metaStats.unlockedBonuses = this.metaStatsV1.unlockedBonuses;
+  }
+
+  /** Sync legacy SaveData fields back to V1 */
+  private syncLegacyToV1(): void {
+    this.metaStatsV1.highScore = this.metaStats.highScore;
+    this.metaStatsV1.highWave = this.metaStats.highWave;
+    this.metaStatsV1.totalGold = this.metaStats.totalGold;
+    this.metaStatsV1.totalShips = this.metaStats.totalShips;
+    this.metaStatsV1.totalWaves = this.metaStats.totalWaves;
+    this.metaStatsV1.bestCombo = this.metaStats.bestCombo;
+    this.metaStatsV1.unlockedBonuses = this.metaStats.unlockedBonuses;
   }
 
   // -----------------------------------------------------------------------
@@ -738,7 +1139,7 @@ export class ProgressionSystem {
 
   /** Called at wave start to apply regen and reset per-wave state */
   onWaveStart(): void {
-    // Apply HP regen between waves
+    // Apply HP regen between waves (upgrade regen + surgeon crew bonus)
     const regen = this.stats.hpRegenPerWave ?? 0;
     if (regen > 0) {
       this.stats.health = Math.min(
@@ -757,6 +1158,7 @@ export class ProgressionSystem {
     if (this.state !== 'active') return;
 
     this.shipsDestroyed++;
+    this.runStats.shipsDestroyed++;
 
     // Track meta stats
     this.metaStats.totalShips++;
@@ -764,6 +1166,7 @@ export class ProgressionSystem {
     if (this.shipsDestroyed >= this.shipsTotal) {
       this.state = 'wave_complete';
       this.metaStats.totalWaves++;
+      this.runStats.wavesCompleted++;
     }
   }
 
@@ -776,6 +1179,7 @@ export class ProgressionSystem {
    * Tier weights: common 60%, rare 30%, legendary 10%.
    * Legendary only available wave 5+ (unless 'early_legendary' unlocked).
    * Already-acquired upgrades are excluded.
+   * If ship class has upgradeBonus > 0, upgrade values are amplified.
    */
   getUpgradeChoices(): Upgrade[] {
     const earlyLegendary = this.hasMetaBonus('early_legendary');
@@ -850,13 +1254,24 @@ export class ProgressionSystem {
   /**
    * Select an upgrade by index. After applying the upgrade, checks for
    * new synergies. Returns any newly activated synergy or null.
+   *
+   * If the ship class has upgradeBonus > 0 (brigantine), the upgrade
+   * is applied with amplified stats: numeric bonuses are multiplied by
+   * (1 + upgradeBonus).
    */
   selectUpgrade(index: number): Synergy | null {
     if (this.state !== 'upgrading') return null;
     if (index < 0 || index >= this.currentUpgradeChoices.length) return null;
 
     const chosen = this.currentUpgradeChoices[index];
-    chosen.apply(this.stats);
+
+    // If upgrade bonus exists, wrap the apply with amplified stats
+    if (this.upgradeBonus > 0) {
+      this.applyUpgradeWithBonus(chosen);
+    } else {
+      chosen.apply(this.stats);
+    }
+
     this.acquiredUpgradeIds.push(chosen.id);
 
     this.currentUpgradeChoices = [];
@@ -865,6 +1280,86 @@ export class ProgressionSystem {
 
     // Check for newly unlocked synergies
     return this.checkSynergies();
+  }
+
+  /**
+   * Apply an upgrade with the ship class upgrade bonus.
+   * For brigantine (10% bonus), numeric stat modifications are amplified.
+   */
+  private applyUpgradeWithBonus(upgrade: Upgrade): void {
+    const mult = 1 + this.upgradeBonus;
+
+    // Snapshot stats before apply
+    const before = { ...this.stats };
+    upgrade.apply(this.stats);
+
+    // Amplify the differences for numeric multiplier stats
+    // Speed: if maxSpeed changed multiplicatively
+    if (this.stats.maxSpeed !== before.maxSpeed && before.maxSpeed > 0) {
+      const ratio = this.stats.maxSpeed / before.maxSpeed;
+      if (ratio !== 1) {
+        const amplifiedRatio = 1 + (ratio - 1) * mult;
+        this.stats.maxSpeed = before.maxSpeed * amplifiedRatio;
+      }
+    }
+
+    // Cannon damage: if cannonDamage changed multiplicatively
+    if (this.stats.cannonDamage !== before.cannonDamage && before.cannonDamage > 0) {
+      const ratio = this.stats.cannonDamage / before.cannonDamage;
+      if (ratio !== 1) {
+        const amplifiedRatio = 1 + (ratio - 1) * mult;
+        this.stats.cannonDamage = before.cannonDamage * amplifiedRatio;
+      }
+    }
+
+    // Max health: if changed additively
+    if (this.stats.maxHealth !== before.maxHealth) {
+      const diff = this.stats.maxHealth - before.maxHealth;
+      if (diff > 0) {
+        const extraBonus = Math.round(diff * this.upgradeBonus);
+        this.stats.maxHealth += extraBonus;
+        // Also heal the extra
+        if (this.stats.health > before.health) {
+          this.stats.health = Math.min(this.stats.health + extraBonus, this.stats.maxHealth);
+        }
+      }
+    }
+
+    // Capture range: if changed multiplicatively
+    if (this.stats.captureRange !== before.captureRange && before.captureRange > 0) {
+      const ratio = this.stats.captureRange / before.captureRange;
+      if (ratio !== 1) {
+        const amplifiedRatio = 1 + (ratio - 1) * mult;
+        this.stats.captureRange = before.captureRange * amplifiedRatio;
+      }
+    }
+
+    // Cannon cooldown: if changed multiplicatively (smaller is better)
+    if (this.stats.cannonCooldown !== before.cannonCooldown && before.cannonCooldown > 0) {
+      const ratio = this.stats.cannonCooldown / before.cannonCooldown;
+      if (ratio !== 1 && ratio < 1) {
+        // Amplify the reduction
+        const amplifiedRatio = 1 + (ratio - 1) * mult;
+        this.stats.cannonCooldown = before.cannonCooldown * amplifiedRatio;
+      }
+    }
+
+    // Armor: if reduced (smaller is better)
+    if (this.stats.armor !== before.armor) {
+      const diff = before.armor - this.stats.armor;
+      if (diff > 0) {
+        const extraBonus = diff * this.upgradeBonus;
+        this.stats.armor = Math.max(0, this.stats.armor - extraBonus);
+      }
+    }
+
+    // HP regen per wave: additive bonus
+    if ((this.stats.hpRegenPerWave ?? 0) !== (before.hpRegenPerWave ?? 0)) {
+      const diff = (this.stats.hpRegenPerWave ?? 0) - (before.hpRegenPerWave ?? 0);
+      if (diff > 0) {
+        this.stats.hpRegenPerWave = (this.stats.hpRegenPerWave ?? 0) + Math.round(diff * this.upgradeBonus);
+      }
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -916,7 +1411,13 @@ export class ProgressionSystem {
     if (this.acquiredUpgradeIds.includes(upgradeId)) return false;
 
     this.score -= cost;
-    upgrade.apply(this.stats);
+
+    if (this.upgradeBonus > 0) {
+      this.applyUpgradeWithBonus(upgrade);
+    } else {
+      upgrade.apply(this.stats);
+    }
+
     this.acquiredUpgradeIds.push(upgradeId);
 
     // Check for synergies after purchasing
@@ -957,13 +1458,14 @@ export class ProgressionSystem {
   takeDamage(amount: number): boolean {
     if (this.state === 'game_over') return true;
 
-    // Ghost Sails dodge check
+    // Ghost Sails dodge check (includes ship class dodge bonus)
     if (this.stats.ghostDodgeChance && Math.random() < this.stats.ghostDodgeChance) {
       return false; // dodged!
     }
 
     const effective = amount * this.stats.armor;
     this.stats.health -= effective;
+    this.runStats.damageTaken += effective;
 
     if (this.stats.health <= 0) {
       // Phoenix Sails: survive one fatal blow per wave
@@ -1013,6 +1515,7 @@ export class ProgressionSystem {
     if (combo > this.metaStats.bestCombo) {
       this.metaStats.bestCombo = combo;
     }
+    this.updateRunCombo(combo);
   }
 
   // -----------------------------------------------------------------------
@@ -1038,7 +1541,8 @@ export class ProgressionSystem {
 
     this.metaStats.totalGold -= unlock.cost;
     this.metaStats.unlockedBonuses.push(unlockId);
-    writeSave(this.metaStats);
+    this.syncLegacyToV1();
+    writeSaveV1(this.metaStatsV1);
     return true;
   }
 
@@ -1059,7 +1563,8 @@ export class ProgressionSystem {
       updated = true;
     }
     if (updated) {
-      writeSave(this.metaStats);
+      this.syncLegacyToV1();
+      writeSaveV1(this.metaStatsV1);
     }
   }
 
@@ -1067,7 +1572,8 @@ export class ProgressionSystem {
   saveMetaStats(): void {
     this.metaStats.highScore = this.highScore;
     this.metaStats.highWave = this.highWave;
-    writeSave(this.metaStats);
+    this.syncLegacyToV1();
+    writeSaveV1(this.metaStatsV1);
   }
 
   getHighWave(): number {
@@ -1093,11 +1599,29 @@ export class ProgressionSystem {
     this.currentUpgradeChoices = [];
     this.acquiredUpgradeIds = [];
     this.activeSynergies = [];
+    this.endlessMode = false;
 
     // Reload save for latest meta-stats (including any purchases)
-    this.metaStats = loadSave();
-    this.highScore = this.metaStats.highScore;
-    this.highWave = this.metaStats.highWave;
+    this.metaStatsV1 = loadSaveV1();
+    this.metaStats = {
+      highScore: this.metaStatsV1.highScore,
+      highWave: this.metaStatsV1.highWave,
+      totalGold: this.metaStatsV1.totalGold,
+      totalShips: this.metaStatsV1.totalShips,
+      totalWaves: this.metaStatsV1.totalWaves,
+      bestCombo: this.metaStatsV1.bestCombo,
+      unlockedBonuses: this.metaStatsV1.unlockedBonuses,
+    };
+    this.highScore = this.metaStatsV1.highScore;
+    this.highWave = this.metaStatsV1.highWave;
+
+    // Reset ship class to default
+    this.shipClass = 'brigantine';
+    this.upgradeBonus = 0;
+
+    // Reset run stats
+    this.runStats = createDefaultRunStats(this.shipClass);
+    this.runStartTime = Date.now();
 
     // Apply meta-persistence bonuses for the new run
     this.applyMetaBonuses();

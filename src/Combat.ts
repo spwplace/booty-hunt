@@ -484,6 +484,7 @@ export class CombatSystem {
 
   checkHits(
     targets: Array<{ pos: THREE.Vector3; hitRadius: number; id: number }>,
+    ghostMissMap?: Map<number, number>,
   ): HitResult[] {
     const results: HitResult[] = [];
 
@@ -506,6 +507,15 @@ export class CombatSystem {
       }
 
       if (hitTarget) {
+        // Ghost miss chance: if target is in the ghost miss map, roll against miss chance
+        if (ghostMissMap && b.isPlayerShot) {
+          const missChance = ghostMissMap.get(hitTarget.id);
+          if (missChance !== undefined && Math.random() < missChance) {
+            // Shot passes through the phased target -- cannonball keeps flying
+            continue;
+          }
+        }
+
         const damage = BASE_DAMAGE * b.damageMultiplier;
         const hitPos = b.pos.clone();
 
@@ -604,6 +614,7 @@ export class CombatSystem {
   checkPlayerHit(
     playerPos: THREE.Vector3,
     playerRadius: number,
+    dodgeChance?: number,
   ): { hit: boolean; damage: number; hitPos: THREE.Vector3 } | null {
     for (const b of this.balls) {
       if (!b.active) continue;
@@ -616,6 +627,12 @@ export class CombatSystem {
       const rSq = playerRadius * playerRadius;
 
       if (distSq < rSq) {
+        // Dodge chance: if set, roll against it -- dodged shots are consumed but deal no damage
+        if (dodgeChance !== undefined && dodgeChance > 0 && Math.random() < dodgeChance) {
+          b.active = false;
+          return null;
+        }
+
         const hitPos = b.pos.clone();
         b.active = false;
         return {
@@ -627,6 +644,44 @@ export class CombatSystem {
     }
 
     return null;
+  }
+
+  // -----------------------------------------------------------------------
+  //  Fire Ship AoE explosion
+  // -----------------------------------------------------------------------
+
+  /**
+   * Check for fire ship AoE damage. When a fire ship explodes, this returns
+   * HitResults for all targets within the explosion radius.
+   * Damage = 40 base * distance falloff (1.0 at center, 0.0 at edge).
+   */
+  checkFireShipAoE(
+    explosionPos: THREE.Vector3,
+    radius: number,
+    targets: Array<{ pos: THREE.Vector3; id: number }>,
+  ): HitResult[] {
+    const results: HitResult[] = [];
+    const FIRE_SHIP_BASE_DAMAGE = 40;
+
+    for (const t of targets) {
+      const dx = explosionPos.x - t.pos.x;
+      const dy = explosionPos.y - t.pos.y;
+      const dz = explosionPos.z - t.pos.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+      if (dist < radius) {
+        const falloff = 1 - dist / radius;
+        const damage = FIRE_SHIP_BASE_DAMAGE * falloff;
+        results.push({
+          targetId: t.id,
+          damage,
+          hitPos: explosionPos.clone(),
+          isAoE: true,
+        });
+      }
+    }
+
+    return results;
   }
 
   // -----------------------------------------------------------------------

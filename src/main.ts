@@ -6,16 +6,25 @@ import {
   CannonSmoke, ExplosionEffect, RainSystem,
   MuzzleFlash, CannonballTrail, ShipBreakup, SpeedLines,
   FireEffect, FloatingDebris,
+  KrakenTentacle, WhirlpoolEffect, SeaSerpentEffect,
+  GhostShipEffect, FireShipExplosion, TreasureSparkle, VictoryConfetti,
 } from './Effects';
 import { UI } from './UI';
 import { audio } from './Audio';
 import { CombatSystem } from './Combat';
 import { WeatherSystem } from './Weather';
 import { ProgressionSystem } from './Progression';
-import type { WaveConfig, PlayerStats, Synergy } from './Progression';
+import type { PlayerStats, Synergy } from './Progression';
 import { screenJuice } from './Juice';
 import { SkySystem } from './Sky';
 import { PortScene } from './Port';
+import { WorldSystem } from './World';
+import { EnemyAISystem } from './EnemyAI';
+import { CrewSystem } from './Crew';
+import { EventSystem } from './Events';
+import { TutorialSystem } from './Tutorial';
+import type { MerchantV1, WaveConfigV1, EnemyType, RunStats } from './Types';
+import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS } from './Types';
 
 // ===================================================================
 //  Mobile detection
@@ -134,6 +143,10 @@ const combat = new CombatSystem(scene);
 const weather = new WeatherSystem(scene);
 const ui = new UI();
 const skySystem = new SkySystem(scene);
+const world = new WorldSystem(scene);
+const crew = new CrewSystem();
+const events = new EventSystem();
+const tutorial = new TutorialSystem();
 
 // Wire weather system to scene targets
 weather.setTargets({
@@ -161,6 +174,12 @@ const shipBreakup = new ShipBreakup(scene);
 const speedLines = new SpeedLines(scene);
 const fireEffect = new FireEffect(scene);
 const floatingDebris = new FloatingDebris(scene);
+const krakenTentacle = new KrakenTentacle(scene);
+const whirlpoolEffect = new WhirlpoolEffect(scene);
+const seaSerpentEffect = new SeaSerpentEffect(scene);
+const fireShipExplosion = new FireShipExplosion(scene);
+const treasureSparkle = new TreasureSparkle(scene);
+const victoryConfetti = new VictoryConfetti(scene);
 
 // ===================================================================
 //  Port scene (lazy-created)
@@ -175,35 +194,7 @@ let portTransitionPhase: 'entering' | 'active' | 'leaving' | 'none' = 'none';
 //  Merchant ships
 // ===================================================================
 
-type MerchantState = 'sailing' | 'fleeing' | 'sinking' | 'surrendering';
-
-interface Merchant {
-  mesh: THREE.Group;
-  pos: THREE.Vector3;
-  heading: number;
-  speed: number;
-  baseSpeed: number;
-  state: MerchantState;
-  sinkTimer: number;
-  sinkPhase: number; // 0-3 for multi-stage sinking
-  value: number;
-  id: number;
-  hp: number;
-  maxHp: number;
-  armed: boolean;
-  fireTimer: number;
-  hitRadius: number;
-  scale: number;
-  // New AI fields
-  zigzagTimer: number;
-  zigzagDir: number;
-  convoyLeaderId: number; // -1 if not in convoy
-  convoyOffset: THREE.Vector3;
-  chainSlowTimer: number; // chain shot slow timer
-  isBoss: boolean;
-  bossEnraged: boolean;
-  surrendering: boolean;
-}
+type Merchant = MerchantV1;
 
 const merchants: Merchant[] = [];
 let nextMerchantId = 0;
@@ -219,52 +210,26 @@ const PIRATE_NAMES = [
   'The Reaper', 'Barnacle Bill', 'Storm Fang', 'Dread Morgan',
 ];
 
-// Track active wave config
-let activeWaveConfig: WaveConfig | null = null;
+// Track active wave config (V1 with enemy types + boss info)
+let activeWaveConfigV1: WaveConfigV1 | null = null;
 let currentBoss: Merchant | null = null;
 
-function spawnMerchant(fromPlayer = true, isBoss = false) {
-  const stats = progression.getPlayerStats();
-  const waveConfig = activeWaveConfig ?? progression.getWaveConfig();
+function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
+  const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
+  const props = EnemyAISystem.getSpawnProps(enemyType, isBoss, waveConfig);
 
   const angle = Math.random() * Math.PI * 2;
-  const dist = fromPlayer ? 30 + Math.random() * 40 : 25 + Math.random() * 30;
-  const origin = fromPlayer ? playerPos : new THREE.Vector3();
-  const px = origin.x + Math.cos(angle) * dist;
-  const pz = origin.z + Math.sin(angle) * dist;
+  const dist = 30 + Math.random() * 40;
+  const px = playerPos.x + Math.cos(angle) * dist;
+  const pz = playerPos.z + Math.sin(angle) * dist;
 
-  let shipScale: number, baseSpeed: number, value: number, baseHp: number;
+  const mesh = createShipMesh(props.hullColor, props.sailColor, props.scale);
 
-  if (isBoss) {
-    shipScale = 1.8;
-    baseSpeed = 1.5 + Math.random() * 0.5;
-    value = 500;
-    baseHp = 100 * 5;
-  } else {
-    const roll = Math.random();
-    if (roll < 0.45) {
-      shipScale = 0.6; baseSpeed = 2.5 + Math.random() * 2; value = 50; baseHp = 50;
-    } else if (roll < 0.82) {
-      shipScale = 0.8; baseSpeed = 1.5 + Math.random() * 1.5; value = 100; baseHp = 75;
-    } else {
-      shipScale = 1.05; baseSpeed = 0.8 + Math.random() * 0.8; value = 250; baseHp = 100;
-    }
+  // Ghost ships get spectral effect
+  if (enemyType === 'ghost_ship') {
+    GhostShipEffect.applyGhostEffect(mesh, false);
   }
 
-  // Apply wave scaling
-  baseSpeed *= waveConfig.speedMultiplier;
-  const hp = Math.round(baseHp * waveConfig.healthMultiplier);
-
-  const armed = isBoss ? true : progression.isArmedShip();
-  const sailCol = isBoss
-    ? 0x220000 // dark red for boss
-    : armed
-      ? 0x111111
-      : SAIL_COLORS[Math.floor(Math.random() * SAIL_COLORS.length)];
-  const hullCol = isBoss ? 0x1a0a0a : armed ? 0x3a2a2a : 0x8b6b4a;
-  const mesh = createShipMesh(hullCol, sailCol, shipScale);
-
-  // Set lanterns if night
   if (weather.getCurrentState() === 'night') {
     setShipLanterns(mesh, true);
   }
@@ -277,69 +242,46 @@ function spawnMerchant(fromPlayer = true, isBoss = false) {
     mesh,
     pos: new THREE.Vector3(px, 0, pz),
     heading,
-    speed: baseSpeed,
-    baseSpeed,
+    speed: props.speed,
+    baseSpeed: props.baseSpeed,
     state: 'sailing',
     sinkTimer: 0,
     sinkPhase: 0,
-    value,
+    value: props.value,
     id: nextMerchantId++,
-    hp,
-    maxHp: hp,
-    armed,
-    fireTimer: 3 + Math.random() * 2,
-    hitRadius: 2.0 + shipScale,
-    scale: shipScale,
+    hp: props.hp,
+    maxHp: props.maxHp,
+    armed: props.armed,
+    fireTimer: props.fireTimer,
+    hitRadius: props.hitRadius,
+    scale: props.scale,
     zigzagTimer: 0,
     zigzagDir: Math.random() > 0.5 ? 1 : -1,
     convoyLeaderId: -1,
     convoyOffset: new THREE.Vector3(),
     chainSlowTimer: 0,
-    isBoss,
+    isBoss: props.isBoss,
     bossEnraged: false,
     surrendering: false,
+    enemyType: props.enemyType,
+    phaseTimer: props.phaseTimer,
+    isPhased: props.isPhased,
+    explosionRadius: props.explosionRadius,
+    hasTreasureMap: false,
+    fleeTimer: props.fleeTimer,
+    formationIndex: props.formationIndex,
+    formationLeaderId: props.formationLeaderId,
   };
 
   merchants.push(m);
 
   if (isBoss) {
     currentBoss = m;
-    const bossName = `Captain ${PIRATE_NAMES[Math.floor(Math.random() * PIRATE_NAMES.length)]}`;
+    const bossName = waveConfig.bossName ?? `Captain ${PIRATE_NAMES[Math.floor(Math.random() * PIRATE_NAMES.length)]}`;
     ui.showBossHealthBar(bossName);
     ui.updateBossHealth(m.hp, m.maxHp);
     audio.playBossWarning();
     audio.setBossMode(true);
-  }
-}
-
-// Convoy spawning: 40% chance to spawn 2-4 ships in formation
-function spawnConvoy() {
-  const count = 2 + Math.floor(Math.random() * 3); // 2-4 ships
-  const leadAngle = Math.random() * Math.PI * 2;
-  const dist = 45 + Math.random() * 65;
-  const leadX = playerPos.x + Math.cos(leadAngle) * dist;
-  const leadZ = playerPos.z + Math.sin(leadAngle) * dist;
-
-  // Spawn leader first
-  spawnMerchant(true);
-  const leader = merchants[merchants.length - 1];
-  leader.pos.set(leadX, 0, leadZ);
-  leader.mesh.position.set(leadX, 0, leadZ);
-
-  // Spawn wingmates
-  for (let i = 1; i < count; i++) {
-    spawnMerchant(true);
-    const wingmate = merchants[merchants.length - 1];
-    wingmate.convoyLeaderId = leader.id;
-    // Line-abreast formation: offset perpendicular to heading
-    const offsetDist = i * 5;
-    const side = i % 2 === 0 ? 1 : -1;
-    wingmate.convoyOffset.set(side * offsetDist * Math.ceil(i / 2), 0, 0);
-    const wx = leadX + Math.cos(leader.heading + Math.PI / 2) * side * offsetDist * Math.ceil(i / 2);
-    const wz = leadZ + Math.sin(leader.heading + Math.PI / 2) * side * offsetDist * Math.ceil(i / 2);
-    wingmate.pos.set(wx, 0, wz);
-    wingmate.mesh.position.set(wx, 0, wz);
-    wingmate.heading = leader.heading;
   }
 }
 
@@ -357,6 +299,12 @@ let waveCompleteTimer = 0;
 let creakTimer = 0;
 let scoreAtWaveStart = 0;
 let gameOverFired = false;
+
+// Tutorial condition tracking
+let tutorialMoved = false;
+let tutorialFired = false;
+let tutorialCaptured = false;
+let tutorialUpgraded = false;
 
 // ===================================================================
 //  Input: keyboard
@@ -379,8 +327,8 @@ window.addEventListener('keydown', (e) => {
 
   // Cannon firing
   if (gameStarted && !gamePaused) {
-    if (e.key.toLowerCase() === 'q') firePort();
-    if (e.key.toLowerCase() === 'e') fireStarboard();
+    if (e.key.toLowerCase() === 'q') { firePort(); tutorialFired = true; }
+    if (e.key.toLowerCase() === 'e') { fireStarboard(); tutorialFired = true; }
   }
 });
 window.addEventListener('keyup', (e) => {
@@ -540,6 +488,14 @@ function startGame() {
 
   audio.init();
 
+  // Generate world islands and feed reef data to ocean shader
+  world.generateIslands();
+  const reefData = world.getReefData();
+  ocean.setReefPositions(reefData);
+
+  // Start tutorial for new players
+  tutorial.start();
+
   setTimeout(() => {
     ui.hideTitle();
     const healthBar = document.getElementById('health-bar');
@@ -558,10 +514,16 @@ function startGame() {
 }
 
 function beginWave() {
-  const config = progression.startWave();
-  activeWaveConfig = config;
+  // Start wave (progression state transition) and get V1 config
+  progression.startWave();
+  const config = progression.getWaveConfigV1();
+  activeWaveConfigV1 = config;
   progression.onWaveStart();
   scoreAtWaveStart = progression.getScore();
+
+  // Apply crew bonuses to stats for this wave
+  progression.applyCrewBonuses(crew.getCrewBonuses());
+  syncUpgradesToCombat();
 
   // Wave preview
   ui.showWavePreview(
@@ -587,6 +549,11 @@ function beginWave() {
   if (config.wave > 1) {
     audio.playWaveComplete();
   }
+
+  // Trigger special event if wave specifies one
+  if (config.specialEvent) {
+    events.startEvent(config.specialEvent, playerPos, world.getIslands().length);
+  }
 }
 
 function spawnWaveFleet() {
@@ -601,30 +568,17 @@ function spawnWaveFleet() {
   currentBoss = null;
   audio.setBossMode(false);
 
-  const config = activeWaveConfig ?? progression.getWaveConfig();
-  const isBossWave = progression.isBossWave();
+  const config = activeWaveConfigV1 ?? progression.getWaveConfigV1();
 
-  // Spawn regular ships, some as convoys
-  let spawned = 0;
-  const targetCount = isBossWave ? config.totalShips - 1 : config.totalShips;
+  // Use EnemyAI to build the spawn list from the V1 wave config
+  const spawnList = EnemyAISystem.getSpawnList(config, config.wave);
 
-  while (spawned < targetCount) {
-    if (Math.random() < 0.4 && targetCount - spawned >= 2) {
-      // Convoy spawn
-      const before = merchants.length;
-      spawnConvoy();
-      const added = merchants.length - before;
-      spawned += added;
-    } else {
-      spawnMerchant(true);
-      spawned++;
-    }
+  for (const entry of spawnList) {
+    spawnEnemy(entry.type, entry.isBoss);
   }
 
-  // Spawn boss on boss waves (every 5th)
-  if (isBossWave) {
-    spawnMerchant(true, true);
-  }
+  // Organize navy_warship formations
+  EnemyAISystem.updateFormation(merchants);
 
   ui.updateWaveCounter(config.wave, config.totalShips, config.totalShips);
 }
@@ -645,6 +599,7 @@ async function onWaveComplete() {
     progression.getAcquiredUpgrades(),
   );
   const synergy = progression.selectUpgrade(choiceIndex);
+  tutorialUpgraded = true;
 
   // Show synergy popup if triggered
   if (synergy) {
@@ -657,14 +612,33 @@ async function onWaveComplete() {
   // Sync upgrade stats to combat system
   syncUpgradesToCombat();
 
+  // Level up crew after each wave
+  crew.levelUpAll();
+  ui.updateCrewHUD(crew.getCrew().map(c => ({
+    role: c.role,
+    level: c.level,
+    icon: CREW_ROLE_CONFIGS[c.role].icon,
+  })));
+
   // Add meta gold (only wave earnings, not cumulative total)
   progression.addMetaGold(progression.getScore() - scoreAtWaveStart);
 
   gamePaused = false;
 
-  // Port visit every 3 waves
+  // Victory check — after final wave, show run summary
+  if (progression.checkVictory()) {
+    gamePaused = true;
+    victoryConfetti.start();
+    audio.playWaveComplete();
+    const runStats = progression.getRunStats();
+    ui.showRunSummary(runStats, []);
+    return;
+  }
+
+  // Port visit on port waves or every 3 waves
   const currentWave = progression.getCurrentWave();
-  if ((currentWave - 1) % 3 === 0 && currentWave > 1) {
+  const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
+  if (waveConfig.isPortWave || ((currentWave - 1) % 3 === 0 && currentWave > 1)) {
     enterPort();
   } else {
     beginWave();
@@ -767,10 +741,55 @@ function enterPort() {
       leavePort();
     },
   );
+
+  // Show crew hiring UI in tavern
+  const availableRoles = crew.getAvailableRoles(progression.getMetaStatsV1());
+  const gold = progression.getScore();
+  ui.showPortCrewHire(
+    availableRoles.map(r => ({
+      role: r.role,
+      name: CREW_ROLE_CONFIGS[r.role].name,
+      icon: CREW_ROLE_CONFIGS[r.role].icon,
+      cost: CREW_ROLE_CONFIGS[r.role].cost,
+      bonusPerLevel: CREW_ROLE_CONFIGS[r.role].bonusPerLevel,
+    })),
+    gold,
+    (role: string) => {
+      const crewRole = role as keyof typeof CREW_ROLE_CONFIGS;
+      const cost = CREW_ROLE_CONFIGS[crewRole].cost;
+      const check = crew.canHire(crewRole, progression.getScore(), progression.getMetaStatsV1());
+      if (check.canHire) {
+        progression.addScore(-cost);
+        crew.hire(crewRole);
+        progression.applyCrewBonuses(crew.getCrewBonuses());
+        audio.playPurchase();
+        ui.updatePortGold(progression.getScore());
+        ui.updateCrewHUD(crew.getCrew().map(c => ({
+          role: c.role,
+          level: c.level,
+          icon: CREW_ROLE_CONFIGS[c.role].icon,
+        })));
+        // Refresh crew hire UI
+        const refreshRoles = crew.getAvailableRoles(progression.getMetaStatsV1());
+        ui.showPortCrewHire(
+          refreshRoles.map(r => ({
+            role: r.role,
+            name: CREW_ROLE_CONFIGS[r.role].name,
+            icon: CREW_ROLE_CONFIGS[r.role].icon,
+            cost: CREW_ROLE_CONFIGS[r.role].cost,
+            bonusPerLevel: CREW_ROLE_CONFIGS[r.role].bonusPerLevel,
+          })),
+          progression.getScore(),
+          () => {}, // placeholder, won't be used since we're already in port
+        );
+      }
+    },
+  );
 }
 
 function leavePort() {
   ui.hidePortUI();
+  ui.hidePortCrewHire();
   audio.stopPortAmbience();
   audio.setPortMode(false);
 
@@ -826,6 +845,25 @@ function restartGame() {
   waveCompleteTimer = 0;
   waveAnnouncePending = false;
   waveAnnounceTimer = 0;
+  activeWaveConfigV1 = null;
+
+  // Reset new systems
+  world.dispose();
+  world.generateIslands();
+  ocean.setReefPositions(world.getReefData());
+  crew.reset();
+  events.reset();
+  tutorial.reset();
+  tutorial.start();
+  tutorialMoved = false;
+  tutorialFired = false;
+  tutorialCaptured = false;
+  tutorialUpgraded = false;
+
+  // Clean up event effects
+  krakenTentacle.dispose();
+  whirlpoolEffect.dispose();
+  seaSerpentEffect.dispose();
 
   // Reset weather to clear
   weather.transitionTo('clear', 2);
@@ -842,6 +880,9 @@ function restartGame() {
   ui.updateHealth(stats.health, stats.maxHealth);
   ui.hideCombo();
   ui.hideBossHealthBar();
+  ui.hideEventWarning();
+  ui.hideEventTimer();
+  ui.hideTreasureMapIndicator();
 
   audio.setBossMode(false);
 
@@ -1038,15 +1079,13 @@ function updateMerchants(dt: number) {
   let nearestPos: THREE.Vector3 | null = null;
 
   const weatherCfg = weather.getCurrentConfig();
-  const fogDensityNorm = Math.min(1, weatherCfg.fogDensity / 0.028);
   const weatherIntensity = weatherCfg.windIntensity;
-  const windDir = weatherCfg.sunDirection;
-
-  // Effective flee range based on fog, boosted by Lookout's Eye
-  const effectiveFleeRange = FLEE_RANGE * (1 - fogDensityNorm * 0.5) * (stats.lookoutEyeRange ?? 1);
 
   // Minimap entity list
   const minimapEntities: Array<{x: number, z: number, type: 'merchant' | 'escort' | 'boss'}> = [];
+
+  // Update formations for navy warships
+  EnemyAISystem.updateFormation(merchants);
 
   for (let i = merchants.length - 1; i >= 0; i--) {
     const m = merchants[i];
@@ -1056,15 +1095,12 @@ function updateMerchants(dt: number) {
       m.sinkTimer += dt;
 
       if (m.sinkTimer < 0.8) {
-        // Phase 1: List to side
         m.mesh.rotation.z += dt * 0.8;
       } else if (m.sinkTimer < 1.5) {
-        // Phase 2: Flood (slow descent, fire starts)
         m.mesh.position.y -= dt * 0.8;
         m.mesh.rotation.z += dt * 0.3;
         fireEffect.emit(m.pos.clone().add(new THREE.Vector3(0, 1, 0)), 3);
       } else if (m.sinkTimer < 2.5) {
-        // Phase 3: Break (spawn debris, rapid tilt)
         if (m.sinkPhase < 3) {
           m.sinkPhase = 3;
           shipBreakup.emit(m.pos);
@@ -1074,7 +1110,6 @@ function updateMerchants(dt: number) {
         m.mesh.rotation.z += dt * 0.5;
         fireEffect.emit(m.pos.clone().add(new THREE.Vector3(0, 0.5, 0)), 2);
       } else {
-        // Phase 4: Submerge
         m.mesh.position.y -= dt * 3.0;
         m.mesh.rotation.z += dt * 0.2;
       }
@@ -1099,11 +1134,6 @@ function updateMerchants(dt: number) {
     // Update sail animation
     updateShipSails(m.mesh, time, weatherCfg.windIntensity);
 
-    // Wind speed modification
-    const mForward = new THREE.Vector3(Math.sin(m.heading), 0, Math.cos(m.heading));
-    const mWindDot = mForward.x * windDir.x + mForward.z * windDir.z;
-    const mWindMod = 1.0 + mWindDot * 0.15;
-
     // Boss enrage check
     if (m.isBoss && !m.bossEnraged && m.hp <= m.maxHp * 0.5) {
       m.bossEnraged = true;
@@ -1111,12 +1141,11 @@ function updateMerchants(dt: number) {
       m.fireTimer = Math.min(m.fireTimer, 1.0);
     }
 
-    // Boss health bar update
     if (m.isBoss) {
       ui.updateBossHealth(m.hp, m.maxHp);
     }
 
-    // --- Surrender check for unarmed ships ---
+    // Surrender check for unarmed ships
     if (!m.armed && !m.isBoss && m.hp > 0 && m.hp < m.maxHp * 0.2 && !m.surrendering) {
       m.surrendering = true;
       m.state = 'surrendering';
@@ -1125,98 +1154,62 @@ function updateMerchants(dt: number) {
       audio.playSurrender();
     }
 
-    // --- Armed escort AI: fire at player ---
-    if (m.armed && dist < 45) {
-      m.fireTimer -= dt;
-      const fireRate = m.isBoss && m.bossEnraged ? 0.8 : m.isBoss ? 1.5 : 3;
-      if (m.fireTimer <= 0) {
-        // Weather affects spread
-        const accuracy = Math.max(0.3, 0.7 - weatherIntensity * 0.3);
-        combat.fireEscortShot(m.pos, m.heading, playerPos, playerVel, accuracy);
+    // Ghost ship phase update
+    if (m.enemyType === 'ghost_ship') {
+      EnemyAISystem.updateGhostPhase(m, dt);
+      GhostShipEffect.applyGhostEffect(m.mesh, m.isPhased);
+    }
+
+    // Fire ship explosion check
+    if (m.enemyType === 'fire_ship') {
+      const explResult = EnemyAISystem.checkFireShipExplosion(m, playerPos);
+      if (explResult && explResult.exploded) {
+        fireShipExplosion.emit(m.pos, explResult.aoeRadius);
+        explosionEffect.emit(m.pos, 40);
+        screenShake.trigger(0.8);
         audio.playExplosion(m.pos, playerPos);
-        m.fireTimer = fireRate + Math.random() * 1.5;
 
-        const fireDir = new THREE.Vector3(
-          playerPos.x - m.pos.x, 0.3, playerPos.z - m.pos.z,
-        ).normalize();
-        cannonSmoke.emit(m.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), fireDir, 8);
-        muzzleFlash.emit(m.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), fireDir);
+        // Damage player if in range
+        if (explResult.playerDamage > 0) {
+          const dead = progression.takeDamage(explResult.playerDamage);
+          ui.updateHealth(stats.health, stats.maxHealth);
+          if (dead && !gameOverFired) {
+            gameOverFired = true;
+            onGameOver();
+          }
+        }
+
+        // Sink the fire ship
+        m.state = 'sinking';
+        m.sinkTimer = 0;
+        m.sinkPhase = 0;
+        m.speed = 0;
+        progression.onShipDestroyed();
+        continue;
       }
     }
 
-    // --- Movement AI ---
-    if (m.state === 'surrendering') {
-      // Surrendering ships drift slowly
-      m.speed = THREE.MathUtils.lerp(m.speed, 0, 1 - Math.exp(-3 * dt));
-    } else if (m.armed && !m.isBoss) {
-      // Escort tactics: seek intercept position between player and nearest unarmed merchant
-      const nearestUnarmed = merchants.find(other =>
-        other.id !== m.id && !other.armed && other.state !== 'sinking',
-      );
-      if (nearestUnarmed && dist < 60) {
-        // Circle-strafe at ~25 units from protect target
-        const toPlayer = Math.atan2(dx, dz);
-        const circleAngle = toPlayer + Math.PI / 3;
-        const targetAngle = circleAngle;
-        const angleDiff = normalizeAngle(targetAngle - m.heading);
-        m.heading += angleDiff * 2.5 * dt;
-        m.speed = Math.min(m.baseSpeed * 1.8 * mWindMod, m.speed + 4 * dt);
-      } else if (dist < effectiveFleeRange) {
-        // Chase player if no merchant to protect
-        const toPlayer = Math.atan2(dx, dz);
-        const angleDiff = normalizeAngle(toPlayer - m.heading);
-        m.heading += angleDiff * 2.5 * dt;
-        m.speed = Math.min(m.baseSpeed * 1.5 * mWindMod, m.speed + 4 * dt);
-      } else {
-        m.state = 'sailing';
-        m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed * mWindMod, 1 - Math.exp(-2 * dt));
-        m.heading += (Math.sin(time * 0.3 + i * 7) * 0.3) * dt;
-      }
-    } else if (m.isBoss) {
-      // Boss AI: aggressively chase player
-      const toPlayer = Math.atan2(dx, dz);
-      const angleDiff = normalizeAngle(toPlayer - m.heading);
-      m.heading += angleDiff * (m.bossEnraged ? 3.0 : 2.0) * dt;
-      m.speed = Math.min(
-        m.baseSpeed * (m.bossEnraged ? 2.0 : 1.5) * mWindMod,
-        m.speed + 5 * dt,
-      );
-    } else if (dist < effectiveFleeRange) {
-      // Fleeing with zigzag evasion
-      m.state = 'fleeing';
-      const awayAngle = Math.atan2(-dx, -dz);
-      const angleDiff = normalizeAngle(awayAngle - m.heading);
-      m.heading += angleDiff * 3.5 * dt;
+    // Delegate AI movement to EnemyAISystem
+    EnemyAISystem.updateAI(m, playerPos, playerAngle, dt, merchants);
 
-      // Zigzag evasion
-      m.zigzagTimer -= dt;
-      if (m.zigzagTimer <= 0) {
-        m.zigzagTimer = 0.8 + Math.random() * 0.4;
-        m.zigzagDir *= -1;
-      }
-      // More frantic when close
-      const urgency = 1 - Math.min(1, dist / effectiveFleeRange);
-      m.heading += m.zigzagDir * 0.8 * dt * (1 + urgency);
+    // Armed enemy firing (using EnemyAI's shouldFire check)
+    m.fireTimer -= dt;
+    if (EnemyAISystem.shouldFire(m, playerPos)) {
+      const accuracy = Math.max(0.3, 0.7 - weatherIntensity * 0.3);
+      combat.fireEscortShot(m.pos, m.heading, playerPos, playerVel, accuracy);
+      audio.playExplosion(m.pos, playerPos);
+      m.fireTimer = EnemyAISystem.getFireCooldown(m);
 
-      m.speed = Math.min(m.baseSpeed * 1.5 * mWindMod, m.speed + 6 * dt);
-    } else if (stats.warDrums && m.armed && dist < effectiveFleeRange * 1.3) {
-      // War drums effect: armed escorts flee at extended range
-      m.state = 'fleeing';
-      const awayAngle = Math.atan2(-dx, -dz);
-      const angleDiff = normalizeAngle(awayAngle - m.heading);
-      m.heading += angleDiff * 2.5 * dt;
-      m.speed = Math.min(m.baseSpeed * 1.8 * mWindMod, m.speed + 5 * dt);
-    } else {
-      m.state = 'sailing';
-      m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed * mWindMod, 1 - Math.exp(-2 * dt));
-      m.heading += (Math.sin(time * 0.3 + i * 7) * 0.3) * dt;
+      const fireDir = new THREE.Vector3(
+        playerPos.x - m.pos.x, 0.3, playerPos.z - m.pos.z,
+      ).normalize();
+      cannonSmoke.emit(m.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), fireDir, 8);
+      muzzleFlash.emit(m.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), fireDir);
     }
 
-    m.pos.x += Math.sin(m.heading) * m.speed * dt;
-    m.pos.z += Math.cos(m.heading) * m.speed * dt;
+    // Apply position and wave tilt
     m.mesh.position.x = m.pos.x;
     m.mesh.position.z = m.pos.z;
-
     applyWaveTilt(m.mesh, m.pos.x, m.pos.z, m.heading, time, dt);
     m.pos.y = m.mesh.position.y;
 
@@ -1231,7 +1224,7 @@ function updateMerchants(dt: number) {
       type: m.isBoss ? 'boss' : m.armed ? 'escort' : 'merchant',
     });
 
-    // --- Surrender capture (proximity, no cannonball needed) ---
+    // Surrender capture
     if (m.surrendering && dist < captureDist) {
       const bonusMultiplier = 1.5 + (stats.boardingPartyBonus ?? 0);
       m.value = Math.round(m.value * bonusMultiplier);
@@ -1239,7 +1232,7 @@ function updateMerchants(dt: number) {
       continue;
     }
 
-    // --- Capture (boarding) ---
+    // Capture (boarding)
     if (dist < captureDist && m.hp <= 0) {
       triggerCapture(m, i);
       continue;
@@ -1250,8 +1243,8 @@ function updateMerchants(dt: number) {
       continue;
     }
 
-    // Ships that flee too far auto-escape (counts toward wave progress, no gold)
-    if (dist > ESCAPE_RANGE && !m.isBoss) {
+    // Despawn check (using EnemyAI)
+    if (EnemyAISystem.shouldDespawn(m, playerPos)) {
       scene.remove(m.mesh);
       merchants.splice(i, 1);
       progression.onShipDestroyed();
@@ -1263,6 +1256,14 @@ function updateMerchants(dt: number) {
     }
   }
 
+  // Add islands to minimap
+  for (const island of world.getIslands()) {
+    minimapEntities.push({
+      x: island.pos.x, z: island.pos.z,
+      type: 'merchant' as const, // reuse merchant color for islands
+    });
+  }
+
   // Update minimap
   ui.updateMinimap(
     { x: playerPos.x, z: playerPos.z },
@@ -1271,8 +1272,18 @@ function updateMerchants(dt: number) {
     stats.cursedCompass,
   );
 
-  // Compass to nearest
-  if (nearestPos) {
+  // Compass: point to treasure island if map active, else nearest ship
+  const treasureIdx = events.getTreasureMapTarget();
+  const islands = world.getIslands();
+  if (treasureIdx >= 0 && treasureIdx < islands.length) {
+    const tIsland = islands[treasureIdx];
+    const tdx = tIsland.pos.x - playerPos.x;
+    const tdz = tIsland.pos.z - playerPos.z;
+    const tDist = Math.sqrt(tdx * tdx + tdz * tdz);
+    const tAngle = Math.atan2(tdx, tdz);
+    ui.updateCompass(tAngle - playerAngle);
+    ui.updateDistance(tDist);
+  } else if (nearestPos) {
     const dx = nearestPos.x - playerPos.x;
     const dz = nearestPos.z - playerPos.z;
     const worldAngle = Math.atan2(dx, dz);
@@ -1321,14 +1332,25 @@ function triggerCapture(m: Merchant, _index: number) {
     audio.setBossMode(false);
     currentBoss = null;
     ui.hideBossHealthBar();
-    // Boss grants 5x gold (base value * 4 extra since 1x already added above)
     progression.addScore(m.value * 4);
   }
+
+  // Roll for treasure map drop
+  if (events.rollForTreasureMap()) {
+    const islands = world.getIslands();
+    if (islands.length > 0) {
+      events.startEvent('treasure_map', playerPos, islands.length);
+      ui.showTreasureMapIndicator();
+    }
+  }
+
+  // Tutorial: captured
+  tutorialCaptured = true;
 
   // Float debris from sinking
   floatingDebris.emit(m.pos);
 
-  // Sink the ship (stays in array, removed by sinking logic when done)
+  // Sink the ship
   m.state = 'sinking';
   m.sinkTimer = 0;
   m.sinkPhase = 0;
@@ -1337,7 +1359,7 @@ function triggerCapture(m: Merchant, _index: number) {
   // Notify progression
   progression.onShipDestroyed();
 
-  const wc = activeWaveConfig ?? progression.getWaveConfig();
+  const wc = activeWaveConfigV1 ?? progression.getWaveConfigV1();
   ui.updateWaveCounter(
     wc.wave,
     progression.getShipsRemaining(),
@@ -1359,6 +1381,9 @@ function syncUpgradesToCombat() {
 }
 
 function updateCombat(dt: number) {
+  // Build ghost miss map for phased ghost ships
+  const ghostMissMap = EnemyAISystem.buildGhostMissMap(merchants);
+
   combat.update(dt);
 
   // Build target list for player cannonballs hitting merchants
@@ -1366,9 +1391,37 @@ function updateCombat(dt: number) {
     .filter(m => m.state !== 'sinking')
     .map(m => ({ pos: m.pos, hitRadius: m.hitRadius, id: m.id }));
 
-  const hits = combat.checkHits(targets);
+  // Add kraken tentacles as targets if event is active
+  const currentEvent = events.getCurrentEvent();
+  if (currentEvent && currentEvent.type === 'kraken' && currentEvent.active) {
+    const tentData = currentEvent.data as Record<string, unknown>;
+    const tentPositions = tentData['tentaclePositions'] as THREE.Vector3[] | undefined;
+    const tentHp = tentData['tentacleHp'] as number[] | undefined;
+    if (tentPositions && tentHp) {
+      for (let t = 0; t < tentPositions.length; t++) {
+        if (tentHp[t] > 0) {
+          targets.push({ pos: tentPositions[t], hitRadius: 3, id: 10000 + t });
+        }
+      }
+    }
+  }
+
+  const hits = combat.checkHits(targets, ghostMissMap);
 
   for (const hit of hits) {
+    // Check if this is a kraken tentacle hit (id >= 10000)
+    if (hit.targetId >= 10000) {
+      const tentIndex = hit.targetId - 10000;
+      const destroyed = events.hitTentacle(tentIndex, hit.damage);
+      explosionEffect.emit(hit.hitPos, 25);
+      audio.playExplosion(hit.hitPos, playerPos);
+      screenShake.trigger(0.3);
+      if (destroyed) {
+        goldBurst.emit(hit.hitPos, 15);
+      }
+      continue;
+    }
+
     const m = merchants.find(m => m.id === hit.targetId);
     if (!m || m.state === 'sinking') continue;
 
@@ -1465,6 +1518,199 @@ function updateWeather(dt: number) {
 }
 
 // ===================================================================
+//  Update: world (islands, collisions, treasure)
+// ===================================================================
+
+let lodTimer = 0;
+
+function updateWorld(dt: number) {
+  // LOD: throttle to ~2 checks/sec instead of every frame
+  lodTimer += dt;
+  if (lodTimer >= 0.5) {
+    lodTimer = 0;
+    world.updateLOD(playerPos);
+  }
+
+  // Check island collision and reef damage
+  const collision = world.checkCollision(playerPos, dt);
+  if (collision.bounceDir) {
+    playerPos.add(collision.bounceDir.multiplyScalar(dt));
+    playerSpeed *= 0.5;
+  }
+  if (collision.reefDamage > 0) {
+    const dead = progression.takeDamage(collision.reefDamage);
+    const stats = progression.getPlayerStats();
+    ui.updateHealth(stats.health, stats.maxHealth);
+    if (dead && !gameOverFired) {
+      gameOverFired = true;
+      onGameOver();
+    }
+  }
+
+  // Check treasure dig site
+  const hasTreasureMap = events.getTreasureMapTarget() >= 0;
+  const digIsland = world.checkDigSite(playerPos, hasTreasureMap);
+  if (digIsland) {
+    const treasureGold = 200 + Math.floor(Math.random() * 600);
+    progression.addScore(treasureGold);
+    ui.showCapture(`+${treasureGold} Treasure!`, 1);
+    goldBurst.emit(playerPos, 50);
+    audio.playCoinJingle(3);
+    world.collectTreasure(digIsland);
+    events.clearTreasureMap();
+    ui.hideTreasureMapIndicator();
+  }
+
+  // Sparkle effect on nearby treasure islands
+  if (hasTreasureMap) {
+    const islands = world.getIslands();
+    const targetIdx = events.getTreasureMapTarget();
+    if (targetIdx >= 0 && targetIdx < islands.length) {
+      const island = islands[targetIdx];
+      if (island.hasTreasure && !island.treasureCollected) {
+        treasureSparkle.spawn(island.pos);
+      }
+    }
+  }
+}
+
+// ===================================================================
+//  Update: events (kraken, whirlpool, serpent, storm surge)
+// ===================================================================
+
+function updateEvents(dt: number) {
+  const waveNum = progression.getCurrentWave();
+  const weatherState = weather.getCurrentState();
+
+  // Roll for random events once per second
+  if (events.shouldRoll()) {
+    const eventType = events.rollForEvent(waveNum, weatherState);
+    if (eventType) {
+      events.startEvent(eventType, playerPos, world.getIslands().length);
+
+      // Spawn event-specific effects
+      const evt = events.getCurrentEvent();
+      if (evt) {
+        switch (evt.type) {
+          case 'kraken': {
+            const tentPositions = evt.data['tentaclePositions'] as THREE.Vector3[] | undefined;
+            if (tentPositions) krakenTentacle.spawn(tentPositions);
+            audio.setEventMode('kraken');
+            break;
+          }
+          case 'whirlpool':
+            whirlpoolEffect.spawn(evt.pos);
+            break;
+          case 'sea_serpent':
+            seaSerpentEffect.spawn(evt.pos);
+            audio.setEventMode('sea_serpent');
+            break;
+          case 'ghost_ship_event':
+            audio.setEventMode('ghost_ship_event');
+            break;
+          case 'storm_surge':
+            weather.triggerStormSurge();
+            break;
+        }
+      }
+    }
+  }
+
+  // Per-frame event update
+  const result = events.update(dt, playerPos, Math.abs(playerSpeed));
+
+  // Apply event damage to player
+  if (result.damageToPlayer > 0) {
+    const dead = progression.takeDamage(result.damageToPlayer);
+    const stats = progression.getPlayerStats();
+    ui.updateHealth(stats.health, stats.maxHealth);
+    screenShake.trigger(0.3);
+    if (dead && !gameOverFired) {
+      gameOverFired = true;
+      onGameOver();
+    }
+  }
+
+  // Apply event gold reward
+  if (result.goldReward > 0) {
+    progression.addScore(result.goldReward);
+    ui.showCapture(`+${result.goldReward} Gold!`, 1);
+    goldBurst.emit(playerPos, 30);
+    audio.playCoinJingle(2);
+  }
+
+  // Apply whirlpool pull force
+  if (result.pullForce) {
+    playerPos.add(result.pullForce.multiplyScalar(dt));
+  }
+
+  // Event UI: warning and timer
+  if (result.warning) {
+    ui.showEventWarning(result.warning);
+  }
+
+  const currentEvt = events.getCurrentEvent();
+  if (currentEvt && currentEvt.active) {
+    ui.showEventTimer(
+      currentEvt.type,
+      currentEvt.duration - currentEvt.timer,
+      currentEvt.duration,
+    );
+
+    // Update event-specific effects
+    if (currentEvt.type === 'kraken') {
+      krakenTentacle.update(dt, time);
+    } else if (currentEvt.type === 'whirlpool') {
+      whirlpoolEffect.update(dt, time);
+    } else if (currentEvt.type === 'sea_serpent') {
+      const serpentDmg = seaSerpentEffect.update(dt, time, playerPos);
+      if (serpentDmg > 0) {
+        const dead = progression.takeDamage(serpentDmg * dt);
+        const stats = progression.getPlayerStats();
+        ui.updateHealth(stats.health, stats.maxHealth);
+        if (dead && !gameOverFired) {
+          gameOverFired = true;
+          onGameOver();
+        }
+      }
+    }
+
+    // Event weather overlay
+    weather.setEventOverlay(currentEvt.type);
+  }
+
+  // Event completed
+  if (result.eventComplete) {
+    ui.hideEventWarning();
+    ui.hideEventTimer();
+    krakenTentacle.dispose();
+    whirlpoolEffect.dispose();
+    seaSerpentEffect.dispose();
+    audio.setEventMode(null);
+    weather.setEventOverlay(null);
+  }
+}
+
+// ===================================================================
+//  Update: tutorial
+// ===================================================================
+
+function updateTutorial(dt: number) {
+  if (!tutorial.isActive()) return;
+
+  // Track movement condition
+  if (Math.abs(playerSpeed) > 1) tutorialMoved = true;
+
+  tutorial.advanceIfConditionMet({
+    moved: tutorialMoved,
+    fired: tutorialFired,
+    captured: tutorialCaptured,
+    upgraded: tutorialUpgraded,
+  });
+  tutorial.update(dt);
+}
+
+// ===================================================================
 //  Wave lifecycle management
 // ===================================================================
 
@@ -1520,6 +1766,9 @@ function animate(now: number) {
     updateMerchants(dt);
     updateCombat(dt);
     updateWeather(dt);
+    updateWorld(dt);
+    updateEvents(dt);
+    updateTutorial(dt);
     updateWaveLifecycle(dt);
     updateCamera(dt);
   } else if (gameStarted && gamePaused) {
@@ -1557,6 +1806,9 @@ function animate(now: number) {
   cannonballTrail.update(dt);
   shipBreakup.update(dt);
   fireEffect.update(dt);
+  fireShipExplosion.update(dt);
+  treasureSparkle.update(dt, time);
+  victoryConfetti.update(dt);
 
   // Speed lines
   if (gameStarted && !gamePaused) {

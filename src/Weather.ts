@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { EventType } from './Types';
 
 // ===================================================================
 //  Types
@@ -195,6 +196,17 @@ export class WeatherSystem {
   private preFlashAmbientIntensity = 0;
   private preFlashAmbientColor = new THREE.Color();
 
+  // Storm surge state
+  private stormSurgeActive = false;
+  private stormSurgeTimer = 0;
+  private stormSurgeDuration = 2.0;     // how long the wave spike lasts
+  private stormSurgeTargetScale = 3.0;  // peak waveScale during surge
+  private preStormSurgeWaveScale = 1.9; // saved before surge starts
+
+  // Event weather overlay state
+  private eventOverlayType: EventType | null = null;
+  private eventOverlayBlend = 0;        // 0 = no overlay, 1 = full overlay
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.currentConfig = cloneConfig(WEATHER_CONFIGS.clear);
@@ -232,6 +244,27 @@ export class WeatherSystem {
   }
 
   // ---------------------------------------------------------------
+  //  triggerStormSurge -- temporarily spike waveScale to 3.0 for 2s
+  //  then smoothly fade back to the current base waveScale.
+  // ---------------------------------------------------------------
+
+  triggerStormSurge(): void {
+    this.stormSurgeActive = true;
+    this.stormSurgeTimer = 0;
+    this.preStormSurgeWaveScale = this.currentConfig.waveScale;
+  }
+
+  // ---------------------------------------------------------------
+  //  setEventOverlay -- temporarily tint weather for event atmosphere
+  //  Pass null to remove the overlay.
+  // ---------------------------------------------------------------
+
+  setEventOverlay(type: EventType | null): void {
+    this.eventOverlayType = type;
+    // If clearing, blend will decay in update; if setting, it ramps up.
+  }
+
+  // ---------------------------------------------------------------
   //  update -- call every frame with delta time
   // ---------------------------------------------------------------
 
@@ -256,6 +289,51 @@ export class WeatherSystem {
       if (rawT >= 1) {
         this.transitioning = false;
         this.currentConfig = cloneConfig(this.txTarget);
+      }
+    }
+
+    // --- Storm surge waveScale override ---
+    if (this.stormSurgeActive) {
+      this.stormSurgeTimer += dt;
+      const surgeT = this.stormSurgeTimer / this.stormSurgeDuration;
+
+      if (surgeT < 1) {
+        // Quick ramp up (first 20%), hold, then smooth decay
+        let surgeFactor: number;
+        if (surgeT < 0.2) {
+          // Ramp up
+          const rampT = surgeT / 0.2;
+          surgeFactor = rampT * rampT; // quadratic ease-in
+        } else {
+          // Decay from peak back to base
+          const decayT = (surgeT - 0.2) / 0.8;
+          const eased = decayT * decayT * (3 - 2 * decayT); // smoothstep
+          surgeFactor = 1 - eased;
+        }
+        this.currentConfig.waveScale = lerpNumber(
+          this.preStormSurgeWaveScale,
+          this.stormSurgeTargetScale,
+          surgeFactor,
+        );
+      } else {
+        // Surge complete -- restore base
+        this.currentConfig.waveScale = this.preStormSurgeWaveScale;
+        this.stormSurgeActive = false;
+      }
+    }
+
+    // --- Event weather overlay ---
+    {
+      const targetBlend = this.eventOverlayType !== null ? 1 : 0;
+      const blendSpeed = 3; // units per second
+      if (this.eventOverlayBlend < targetBlend) {
+        this.eventOverlayBlend = Math.min(targetBlend, this.eventOverlayBlend + blendSpeed * dt);
+      } else if (this.eventOverlayBlend > targetBlend) {
+        this.eventOverlayBlend = Math.max(targetBlend, this.eventOverlayBlend - blendSpeed * dt);
+      }
+
+      if (this.eventOverlayBlend > 0.001) {
+        this.applyEventOverlay(this.eventOverlayType, this.eventOverlayBlend);
       }
     }
 
@@ -338,6 +416,57 @@ export class WeatherSystem {
 
     result.config = this.currentConfig;
     return result;
+  }
+
+  // ---------------------------------------------------------------
+  //  applyEventOverlay -- blend event-specific tinting into config
+  // ---------------------------------------------------------------
+
+  private applyEventOverlay(type: EventType | null, blend: number): void {
+    if (!type || blend <= 0) return;
+
+    const cfg = this.currentConfig;
+
+    switch (type) {
+      case 'kraken': {
+        // Darker fog with greenish tint
+        const krakenFog = new THREE.Color(0x0a1a0a);
+        const krakenAmbient = new THREE.Color(0x112211);
+        cfg.fogColor.lerp(krakenFog, blend * 0.5);
+        cfg.fogDensity = lerpNumber(cfg.fogDensity, cfg.fogDensity * 1.5, blend);
+        cfg.ambientColor.lerp(krakenAmbient, blend * 0.4);
+        cfg.ambientIntensity = lerpNumber(cfg.ambientIntensity, cfg.ambientIntensity * 0.7, blend);
+        cfg.skyHorizon.lerp(new THREE.Color(0x0a2a0a), blend * 0.3);
+        break;
+      }
+
+      case 'ghost_ship_event': {
+        // Very foggy with bluish tint
+        const ghostFog = new THREE.Color(0x334466);
+        const ghostAmbient = new THREE.Color(0x223355);
+        cfg.fogColor.lerp(ghostFog, blend * 0.6);
+        cfg.fogDensity = lerpNumber(cfg.fogDensity, 0.025, blend);
+        cfg.ambientColor.lerp(ghostAmbient, blend * 0.5);
+        cfg.ambientIntensity = lerpNumber(cfg.ambientIntensity, cfg.ambientIntensity * 0.6, blend);
+        cfg.skyMid.lerp(new THREE.Color(0x112244), blend * 0.4);
+        cfg.skyHorizon.lerp(new THREE.Color(0x223355), blend * 0.4);
+        break;
+      }
+
+      case 'sea_serpent': {
+        // Slight stormy overlay -- darker, windier feel
+        const serpentFog = new THREE.Color(0x0a0c14);
+        cfg.fogColor.lerp(serpentFog, blend * 0.3);
+        cfg.ambientIntensity = lerpNumber(cfg.ambientIntensity, cfg.ambientIntensity * 0.8, blend);
+        cfg.windIntensity = lerpNumber(cfg.windIntensity, Math.min(cfg.windIntensity + 0.3, 1.0), blend);
+        cfg.waveScale = lerpNumber(cfg.waveScale, cfg.waveScale * 1.2, blend * 0.5);
+        break;
+      }
+
+      // storm_surge, whirlpool, treasure_map: no weather overlay
+      default:
+        break;
+    }
   }
 
   // ---------------------------------------------------------------

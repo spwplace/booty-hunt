@@ -732,6 +732,487 @@
     /* ---- Hit Direction Indicators (created by Juice.ts) ---- */
     /* ---- Damage/Combo Flash (created by Juice.ts) ---- */
 
+    /* ---- Ship Select Screen ---- */
+    #ship-select {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 110;
+      pointer-events: auto;
+      font-family: 'Pirata One', cursive;
+    }
+    #ship-select h2 {
+      font-size: clamp(1.8rem, 5vw, 3rem);
+      color: #FFD700;
+      text-shadow: 2px 2px 0 #000, 0 0 20px rgba(255,200,0,0.4);
+      margin-bottom: 2rem;
+    }
+    #ship-cards {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      padding: 0 1rem;
+    }
+    .ship-card {
+      width: 220px;
+      padding: 1.5rem 1rem;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid rgba(255,215,0,0.3);
+      border-radius: 12px;
+      text-align: center;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+      font-family: 'Pirata One', cursive;
+      position: relative;
+    }
+    .ship-card:hover {
+      transform: scale(1.06) translateY(-4px);
+      border-color: #FFD700;
+      box-shadow: 0 0 30px rgba(255,200,0,0.3), 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .ship-card.locked {
+      opacity: 0.45;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .ship-card .ship-icon {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+    .ship-card .ship-name {
+      color: #FFD700;
+      font-size: 1.4rem;
+      margin-bottom: 0.4rem;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .ship-card .ship-stats {
+      color: rgba(255,255,255,0.7);
+      font-size: 0.8rem;
+      line-height: 1.6;
+      margin-bottom: 0.5rem;
+    }
+    .ship-card .ship-desc {
+      color: rgba(255,255,255,0.55);
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+    .ship-card .ship-lock-icon {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 3rem;
+      opacity: 0.7;
+    }
+    .ship-card .ship-select-btn {
+      margin-top: 0.8rem;
+      font-family: 'Pirata One', cursive;
+      font-size: 1.1rem;
+      color: #FFD700;
+      background: rgba(255,215,0,0.15);
+      border: 2px solid rgba(255,215,0,0.4);
+      border-radius: 6px;
+      padding: 0.5rem 1.5rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .ship-card .ship-select-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 15px rgba(255,200,0,0.3);
+    }
+
+    /* ---- Pause Menu ---- */
+    #pause-menu {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      z-index: 120;
+      pointer-events: auto;
+      font-family: 'Pirata One', cursive;
+    }
+    #pause-menu h2 {
+      font-size: clamp(2rem, 6vw, 3.5rem);
+      color: #FFD700;
+      text-shadow: 2px 2px 0 #000, 0 0 20px rgba(255,200,0,0.4);
+      margin-bottom: 1rem;
+    }
+    #pause-menu button {
+      font-family: 'Pirata One', cursive;
+      font-size: 1.3rem;
+      color: #FFD700;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid rgba(255,215,0,0.4);
+      border-radius: 8px;
+      padding: 0.7rem 2.5rem;
+      cursor: pointer;
+      pointer-events: auto;
+      min-width: 220px;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    #pause-menu button:hover {
+      transform: scale(1.05);
+      border-color: #FFD700;
+      box-shadow: 0 0 20px rgba(255,200,0,0.3);
+    }
+
+    /* ---- Settings Panel ---- */
+    #settings-panel {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.2rem;
+      z-index: 130;
+      pointer-events: auto;
+      font-family: 'Pirata One', cursive;
+    }
+    #settings-panel h2 {
+      font-size: clamp(1.8rem, 5vw, 3rem);
+      color: #FFD700;
+      text-shadow: 2px 2px 0 #000, 0 0 20px rgba(255,200,0,0.4);
+      margin-bottom: 1rem;
+    }
+    .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      min-width: 300px;
+      justify-content: space-between;
+    }
+    .setting-row label {
+      color: rgba(255,255,255,0.8);
+      font-size: 1.1rem;
+    }
+    .setting-row input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 140px;
+      height: 6px;
+      background: rgba(255,215,0,0.25);
+      border-radius: 3px;
+      outline: none;
+      cursor: pointer;
+    }
+    .setting-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      background: #FFD700;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(255,200,0,0.5);
+    }
+    .setting-row input[type="range"]::-moz-range-thumb {
+      width: 16px; height: 16px;
+      background: #FFD700;
+      border-radius: 50%;
+      cursor: pointer;
+      border: none;
+    }
+    .setting-row select {
+      font-family: 'Pirata One', cursive;
+      font-size: 1rem;
+      color: #FFD700;
+      background: rgba(40,20,10,0.9);
+      border: 1px solid rgba(255,215,0,0.4);
+      border-radius: 4px;
+      padding: 0.3rem 0.6rem;
+      cursor: pointer;
+    }
+    #settings-back {
+      font-family: 'Pirata One', cursive;
+      font-size: 1.2rem;
+      color: #FFD700;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid rgba(255,215,0,0.4);
+      border-radius: 8px;
+      padding: 0.6rem 2rem;
+      margin-top: 1rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    #settings-back:hover {
+      transform: scale(1.05);
+      border-color: #FFD700;
+    }
+
+    /* ---- Run Summary / Victory Screen ---- */
+    #run-summary {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 115;
+      pointer-events: auto;
+      font-family: 'Pirata One', cursive;
+      overflow-y: auto;
+    }
+    #run-summary-title {
+      font-size: clamp(2rem, 8vw, 4.5rem);
+      text-shadow: 3px 3px 0 #000, 0 0 40px rgba(255,200,0,0.5);
+      margin-bottom: 1.5rem;
+    }
+    #run-summary-title.victory {
+      color: #FFD700;
+      text-shadow: 3px 3px 0 #000, 0 0 50px rgba(255,215,0,0.7);
+    }
+    #run-summary-title.defeat {
+      color: #f44336;
+      text-shadow: 3px 3px 0 #000, 0 0 40px rgba(244,67,54,0.5);
+    }
+    #run-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem 2rem;
+      margin-bottom: 1.5rem;
+      min-width: 360px;
+    }
+    .run-stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+      border-bottom: 1px solid rgba(255,215,0,0.12);
+    }
+    .run-stat-label {
+      color: rgba(255,255,255,0.6);
+      font-size: 1rem;
+    }
+    .run-stat-value {
+      color: #FFD700;
+      font-size: 1.15rem;
+      text-shadow: 1px 1px 0 #000;
+    }
+    #unlock-announcements {
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+    .unlock-item {
+      color: #4fc3f7;
+      font-size: 1.1rem;
+      padding: 0.3rem 0;
+      text-shadow: 0 0 8px rgba(79,195,247,0.5);
+    }
+    #run-summary-restart {
+      font-family: 'Pirata One', cursive;
+      font-size: 1.5rem;
+      color: #FFD700;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid #FFD700;
+      border-radius: 8px;
+      padding: 0.8rem 2.5rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    #run-summary-restart:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 25px rgba(255,200,0,0.4);
+    }
+
+    /* ---- Crew HUD ---- */
+    #crew-hud {
+      position: absolute;
+      bottom: 70px; left: 28px;
+      display: flex;
+      gap: 6px;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .crew-hud-icon {
+      width: 36px; height: 36px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,215,0,0.3);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Pirata One', cursive;
+      position: relative;
+    }
+    .crew-hud-icon .crew-emoji {
+      font-size: 1.1rem;
+      line-height: 1;
+    }
+    .crew-hud-icon .crew-level {
+      font-size: 0.55rem;
+      color: #FFD700;
+      position: absolute;
+      bottom: 1px; right: 3px;
+    }
+
+    /* ---- Event Warning ---- */
+    #event-warning {
+      position: absolute;
+      top: 45%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: clamp(1.5rem, 5vw, 2.8rem);
+      color: #f44336;
+      text-shadow: 0 0 20px rgba(244,67,54,0.7), 2px 2px 0 #000;
+      font-family: 'Pirata One', cursive;
+      z-index: 105;
+      pointer-events: none;
+      white-space: nowrap;
+      animation: event-pulse 0.6s ease-in-out infinite;
+    }
+    @keyframes event-pulse {
+      0%, 100% { opacity: 0.8; transform: translate(-50%, -50%) scale(1); }
+      50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+    }
+
+    /* ---- Event Timer ---- */
+    #event-timer {
+      position: absolute;
+      top: 60px; left: 50%;
+      transform: translateX(-50%);
+      width: 200px;
+      z-index: 106;
+      pointer-events: none;
+      font-family: 'Pirata One', cursive;
+      text-align: center;
+    }
+    #event-timer .event-timer-name {
+      color: rgba(255,255,255,0.8);
+      font-size: 0.85rem;
+      margin-bottom: 4px;
+      text-shadow: 1px 1px 0 #000;
+    }
+    #event-timer .event-timer-track {
+      width: 100%; height: 8px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,215,0,0.3);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    #event-timer .event-timer-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #f44336, #ff9800);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    #event-timer .event-timer-countdown {
+      color: rgba(255,255,255,0.6);
+      font-size: 0.75rem;
+      margin-top: 2px;
+    }
+
+    /* ---- Treasure Map Indicator ---- */
+    #treasure-map-indicator {
+      position: absolute;
+      top: 50%; right: 28px;
+      transform: translateY(-50%);
+      font-size: 1.3rem;
+      color: #FFD700;
+      text-shadow: 0 0 10px rgba(255,200,0,0.5), 2px 2px 0 #000;
+      font-family: 'Pirata One', cursive;
+      z-index: 12;
+      pointer-events: none;
+      animation: treasure-bob 1.5s ease-in-out infinite;
+    }
+    @keyframes treasure-bob {
+      0%, 100% { transform: translateY(-50%); }
+      50% { transform: translateY(-58%); }
+    }
+
+    /* ---- Tutorial Overlay ---- */
+    #tutorial-overlay {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      height: 30%;
+      background: linear-gradient(transparent, rgba(0,0,0,0.8));
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      padding-bottom: 3rem;
+      z-index: 108;
+      pointer-events: none;
+      font-family: 'Pirata One', cursive;
+    }
+    #tutorial-text {
+      font-size: clamp(1rem, 3vw, 1.6rem);
+      color: rgba(255,255,255,0.9);
+      text-shadow: 2px 2px 0 #000, 0 0 12px rgba(255,200,0,0.3);
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    #tutorial-skip {
+      font-family: 'Pirata One', cursive;
+      font-size: 0.85rem;
+      color: rgba(255,255,255,0.5);
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 4px;
+      padding: 0.3rem 1rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    #tutorial-skip:hover {
+      color: #FFD700;
+      border-color: rgba(255,215,0,0.4);
+    }
+
+    /* ---- Port Crew Hire Section ---- */
+    #port-crew-hire {
+      margin-top: 1rem;
+    }
+    #port-crew-hire h3 {
+      color: #FFD700;
+      font-size: 1.2rem;
+      text-shadow: 1px 1px 0 #000;
+      margin-bottom: 0.6rem;
+      text-align: center;
+    }
+    .crew-hire-cards {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .crew-hire-card {
+      width: 130px;
+      padding: 0.7rem 0.5rem;
+      background: rgba(40,20,10,0.9);
+      border: 1px solid rgba(255,215,0,0.25);
+      border-radius: 8px;
+      text-align: center;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.15s, border-color 0.15s;
+      font-family: 'Pirata One', cursive;
+    }
+    .crew-hire-card:hover {
+      transform: scale(1.04);
+      border-color: #FFD700;
+    }
+    .crew-hire-card.disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .crew-hire-card .hire-icon { font-size: 1.6rem; }
+    .crew-hire-card .hire-name { color: #FFD700; font-size: 0.85rem; margin: 0.2rem 0; }
+    .crew-hire-card .hire-bonus { color: rgba(255,255,255,0.5); font-size: 0.65rem; }
+    .crew-hire-card .hire-cost { color: #FFD700; font-size: 0.8rem; margin-top: 0.3rem; }
+
     /* ---- Mobile adjustments ---- */
     @media (max-width: 768px) {
       #score { font-size: 1.4rem; top: env(safe-area-inset-top, 16px); left: 16px; }
@@ -769,6 +1250,22 @@
       #port-shop-list { max-height: 200px; }
       .port-shop-item .shop-icon { font-size: 1.2rem; }
       .port-shop-item .shop-name { font-size: 0.85rem; }
+      .ship-card { width: 160px; padding: 1rem 0.7rem; }
+      .ship-card .ship-icon { font-size: 2.2rem; }
+      .ship-card .ship-name { font-size: 1.1rem; }
+      .ship-card .ship-stats { font-size: 0.7rem; }
+      #ship-cards { gap: 0.8rem; }
+      #pause-menu button { font-size: 1.1rem; min-width: 180px; padding: 0.6rem 1.5rem; }
+      .setting-row { min-width: 250px; }
+      .setting-row input[type="range"] { width: 100px; }
+      #run-stats { grid-template-columns: 1fr; min-width: 250px; }
+      .crew-hud-icon { width: 30px; height: 30px; }
+      .crew-hud-icon .crew-emoji { font-size: 0.9rem; }
+      #event-warning { font-size: clamp(1.2rem, 4vw, 2rem); }
+      #event-timer { width: 150px; }
+      .crew-hire-card { width: 100px; padding: 0.5rem 0.3rem; }
+      .crew-hire-card .hire-icon { font-size: 1.2rem; }
+      .crew-hire-card .hire-name { font-size: 0.75rem; }
     }
     @media (max-height: 500px) {
       #score { font-size: 1.2rem; top: 8px; left: 12px; }
@@ -861,11 +1358,78 @@
             <button id="port-full-repair-btn" class="port-btn">Full Repair</button>
           </div>
         </div>
+        <div id="port-crew-hire"></div>
         <div id="port-footer">
           <div id="port-gold-display">Gold: 0</div>
           <button id="port-set-sail-btn" class="port-btn port-sail-btn">Set Sail</button>
         </div>
       </div>
+    </div>
+
+    <!-- Ship Select Screen -->
+    <div id="ship-select" style="display:none;">
+      <h2>Choose Yer Vessel</h2>
+      <div id="ship-cards"></div>
+    </div>
+
+    <!-- Pause Menu -->
+    <div id="pause-menu" style="display:none;">
+      <h2>Paused</h2>
+      <button id="pause-resume">Resume</button>
+      <button id="pause-settings">Settings</button>
+      <button id="pause-quit">Quit to Title</button>
+    </div>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" style="display:none;">
+      <h2>Settings</h2>
+      <div class="setting-row">
+        <label>Master Volume</label>
+        <input type="range" id="vol-master" min="0" max="100" value="100">
+      </div>
+      <div class="setting-row">
+        <label>Music Volume</label>
+        <input type="range" id="vol-music" min="0" max="100" value="100">
+      </div>
+      <div class="setting-row">
+        <label>SFX Volume</label>
+        <input type="range" id="vol-sfx" min="0" max="100" value="100">
+      </div>
+      <div class="setting-row">
+        <label>Graphics Quality</label>
+        <select id="gfx-quality">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <button id="settings-back">Back</button>
+    </div>
+
+    <!-- Run Summary / Victory Screen -->
+    <div id="run-summary" style="display:none;">
+      <h2 id="run-summary-title">Ye Been Sunk!</h2>
+      <div id="run-stats"></div>
+      <div id="unlock-announcements"></div>
+      <button id="run-summary-restart">Play Again</button>
+    </div>
+
+    <!-- Crew HUD -->
+    <div id="crew-hud"></div>
+
+    <!-- Event Warning -->
+    <div id="event-warning" style="display:none;"></div>
+
+    <!-- Event Timer -->
+    <div id="event-timer" style="display:none;"></div>
+
+    <!-- Treasure Map Indicator -->
+    <div id="treasure-map-indicator" style="display:none;">Treasure Map!</div>
+
+    <!-- Tutorial Overlay -->
+    <div id="tutorial-overlay" style="display:none;">
+      <div id="tutorial-text"></div>
+      <button id="tutorial-skip">Skip Tutorial</button>
     </div>
   </div>
   <div id="joystick-base"><div id="joystick-thumb"></div></div>

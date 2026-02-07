@@ -6,12 +6,20 @@ import * as THREE from 'three';
 //  Lazy-initializes on first user interaction. Export: `audio` singleton.
 // ============================================================================
 
+export type EventType = 'kraken' | 'ghost_ship_event' | 'sea_serpent';
+
 class Audio {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private initialized = false;
   private muted = false;
   private previousVolume = 1.0;
+
+  // --- Separate volume control nodes ---
+  private sfxGain: GainNode | null = null;
+  private musicGainNode: GainNode | null = null;
+  private sfxVolume = 1.0;
+  private musicVolume = 1.0;
 
   // --- Ambient layer nodes ---
   private oceanSource: AudioBufferSourceNode | null = null;
@@ -38,9 +46,10 @@ class Audio {
   // --- Speed factor ---
   private speedFactor = 0;
 
-  // --- Boss / Port mode ---
+  // --- Boss / Port / Event mode ---
   private bossMode = false;
   private portMode = false;
+  private eventMode: EventType | null = null;
 
   // --- Port ambience nodes ---
   private portAmbiencePlaying = false;
@@ -70,6 +79,16 @@ class Audio {
     this.master = this.ctx.createGain();
     this.master.gain.value = 1.0;
     this.master.connect(this.ctx.destination);
+
+    // SFX bus: all sound effects route through here
+    this.sfxGain = this.ctx.createGain();
+    this.sfxGain.gain.value = this.sfxVolume;
+    this.sfxGain.connect(this.master);
+
+    // Music bus: the musicGainNode controls music volume separately
+    this.musicGainNode = this.ctx.createGain();
+    this.musicGainNode.gain.value = this.musicVolume;
+    this.musicGainNode.connect(this.master);
 
     // Resume context if suspended (autoplay policy)
     if (this.ctx.state === 'suspended') {
@@ -232,13 +251,112 @@ class Audio {
     const ctx = this.ctx!;
     this.musicGain = ctx.createGain();
     this.musicGain.gain.value = 0.08;
-    this.musicGain.connect(this.master!);
+    this.musicGain.connect(this.musicGainNode!);
     this.musicPlaying = true;
     this.scheduleShantyBar(0);
   }
 
   private scheduleShantyBar(barIndex: number): void {
     if (!this.ctx || !this.musicPlaying) return;
+
+    // --- Event mode: Kraken (A minor, 120 BPM, heavy bass) ---
+    if (this.eventMode === 'kraken') {
+      const A3 = 220, C4 = 261.63, D4 = 293.66, E4 = 329.63;
+      const G4 = 392, A4 = 440;
+
+      const krakenMelody: number[][] = [
+        [A3, A3, C4, D4, E4, E4, D4, C4],
+        [D4, E4, G4, E4, D4, C4, A3, C4],
+        [E4, G4, A4, G4, E4, D4, C4, D4],
+        [A4, G4, E4, D4, C4, A3, A3, A3],
+      ];
+
+      const bpm = 120;
+      const eighthNoteSec = 60 / bpm / 2;
+      const barDuration = 8 * eighthNoteSec;
+      const bar = krakenMelody[barIndex % krakenMelody.length];
+      const now = this.ctx.currentTime;
+
+      for (let i = 0; i < bar.length; i++) {
+        const freq = bar[i];
+        const startTime = now + i * eighthNoteSec;
+        const noteDur = eighthNoteSec * 0.85;
+        this.playMelodyNote(freq, startTime, noteDur);
+      }
+
+      const nextBarTime = barDuration * 1000;
+      this.musicTimeoutId = window.setTimeout(() => {
+        this.scheduleShantyBar(barIndex + 1);
+      }, nextBarTime);
+      return;
+    }
+
+    // --- Event mode: Ghost Ship (whole-tone scale, 80 BPM, ethereal) ---
+    if (this.eventMode === 'ghost_ship_event') {
+      // Whole-tone scale: C4, D4, E4, F#4, G#4, A#4
+      const C4 = 261.63, D4 = 293.66, E4 = 329.63;
+      const Fs4 = 369.99, Gs4 = 415.30, As4 = 466.16;
+
+      const ghostMelody: number[][] = [
+        [C4, E4, Gs4, E4, C4, D4, Fs4, D4],
+        [E4, Gs4, As4, Gs4, Fs4, D4, C4, E4],
+        [Fs4, As4, Gs4, Fs4, E4, D4, C4, D4],
+        [As4, Gs4, Fs4, E4, D4, C4, D4, C4],
+      ];
+
+      const bpm = 80;
+      const eighthNoteSec = 60 / bpm / 2;
+      const barDuration = 8 * eighthNoteSec;
+      const bar = ghostMelody[barIndex % ghostMelody.length];
+      const now = this.ctx.currentTime;
+
+      for (let i = 0; i < bar.length; i++) {
+        const freq = bar[i];
+        const startTime = now + i * eighthNoteSec;
+        const noteDur = eighthNoteSec * 0.85;
+        this.playMelodyNote(freq, startTime, noteDur);
+      }
+
+      const nextBarTime = barDuration * 1000;
+      this.musicTimeoutId = window.setTimeout(() => {
+        this.scheduleShantyBar(barIndex + 1);
+      }, nextBarTime);
+      return;
+    }
+
+    // --- Event mode: Sea Serpent (chromatic tension, 160 BPM) ---
+    if (this.eventMode === 'sea_serpent') {
+      // Chromatic tension: E4, F4, G4, Ab4, Bb4, B4, C5, Db5
+      const E4 = 329.63, F4 = 349.23, G4 = 392;
+      const Ab4 = 415.30, Bb4 = 466.16, B4 = 493.88;
+      const C5 = 523.25, Db5 = 554.37;
+
+      const serpentMelody: number[][] = [
+        [E4, F4, G4, Ab4, Bb4, Ab4, G4, F4],
+        [G4, Ab4, Bb4, B4, C5, B4, Bb4, Ab4],
+        [Bb4, B4, C5, Db5, C5, B4, Bb4, Ab4],
+        [C5, Db5, C5, B4, Bb4, Ab4, G4, F4],
+      ];
+
+      const bpm = 160;
+      const eighthNoteSec = 60 / bpm / 2;
+      const barDuration = 8 * eighthNoteSec;
+      const bar = serpentMelody[barIndex % serpentMelody.length];
+      const now = this.ctx.currentTime;
+
+      for (let i = 0; i < bar.length; i++) {
+        const freq = bar[i];
+        const startTime = now + i * eighthNoteSec;
+        const noteDur = eighthNoteSec * 0.85;
+        this.playMelodyNote(freq, startTime, noteDur);
+      }
+
+      const nextBarTime = barDuration * 1000;
+      this.musicTimeoutId = window.setTimeout(() => {
+        this.scheduleShantyBar(barIndex + 1);
+      }, nextBarTime);
+      return;
+    }
 
     // --- Boss mode: A minor pentatonic at 182 BPM ---
     if (this.bossMode) {
@@ -378,7 +496,7 @@ class Audio {
    *  All summed through a compressor for maximum impact.
    */
   playCannon(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -395,7 +513,7 @@ class Audio {
     comp.release.value = 0.1;
 
     shotGain.connect(comp);
-    comp.connect(this.master);
+    comp.connect(this.sfxGain);
 
     // Layer 1: Noise burst (the initial "crack")
     const noiseBuf = this.createNoiseBuffer(0.08);
@@ -468,7 +586,7 @@ class Audio {
    * Pitch varies randomly for variety.
    */
   playExplosion(position: THREE.Vector3, listenerPos: THREE.Vector3): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -481,7 +599,7 @@ class Audio {
 
     const expGain = ctx.createGain();
     expGain.gain.value = volume * 0.8;
-    expGain.connect(this.master);
+    expGain.connect(this.sfxGain);
 
     // Layer 1: Noise burst — longer than cannon
     const noiseBuf = this.createNoiseBuffer(0.15);
@@ -547,7 +665,7 @@ class Audio {
    * Higher combos = more notes, faster, more sparkly.
    */
   playCoinJingle(combo: number): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -571,7 +689,7 @@ class Audio {
 
     const jingleGain = ctx.createGain();
     jingleGain.gain.value = 0.25;
-    jingleGain.connect(this.master);
+    jingleGain.connect(this.sfxGain);
 
     for (let i = 0; i < notes.length; i++) {
       const t = now + i * noteSpacing;
@@ -624,7 +742,7 @@ class Audio {
 
   /** Short high-passed noise burst — water splash. */
   playSplash(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -649,7 +767,7 @@ class Audio {
     noise.connect(hpf);
     hpf.connect(lpf);
     lpf.connect(splashGain);
-    splashGain.connect(this.master);
+    splashGain.connect(this.sfxGain);
 
     noise.start(now);
     noise.stop(now + 0.12);
@@ -661,7 +779,7 @@ class Audio {
 
   /** Ascending triangle-wave "ding" — pitch rises with combo level. */
   playComboTone(level: number): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -680,7 +798,7 @@ class Audio {
     toneGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
 
     osc.connect(toneGain);
-    toneGain.connect(this.master);
+    toneGain.connect(this.sfxGain);
 
     osc.start(now);
     osc.stop(now + 0.3);
@@ -696,7 +814,7 @@ class Audio {
    * built from multiple slow LFOs. Duration 1.2–2.8s.
    */
   playThunder(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -770,7 +888,7 @@ class Audio {
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
     noiseGain.connect(thunderGain);
-    thunderGain.connect(this.master);
+    thunderGain.connect(this.sfxGain);
 
     rumble.start(now);
     rumble.stop(now + duration + 0.1);
@@ -793,7 +911,7 @@ class Audio {
    * with a wobbling center frequency. Short, nautical, characterful.
    */
   playCreak(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -821,7 +939,7 @@ class Audio {
 
     noise.connect(bp);
     bp.connect(creakGain);
-    creakGain.connect(this.master);
+    creakGain.connect(this.sfxGain);
 
     noise.start(now);
     noise.stop(now + duration + 0.05);
@@ -836,7 +954,7 @@ class Audio {
    * Perfect for sudden gusts or dramatic weather moments.
    */
   playWindGust(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -861,7 +979,7 @@ class Audio {
 
     noise.connect(bp);
     bp.connect(gustGain);
-    gustGain.connect(this.master);
+    gustGain.connect(this.sfxGain);
 
     noise.start(now);
     noise.stop(now + duration + 0.1);
@@ -876,7 +994,7 @@ class Audio {
    * at 2000Hz. Fast decay, snappy transient.
    */
   playMuzzleBlast(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -895,7 +1013,7 @@ class Audio {
 
     noise.connect(hpf);
     hpf.connect(blastGain);
-    blastGain.connect(this.master);
+    blastGain.connect(this.sfxGain);
 
     noise.start(now);
     noise.stop(now + 0.03);
@@ -910,7 +1028,7 @@ class Audio {
    * Slight detune for character.
    */
   playSurrender(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -924,7 +1042,7 @@ class Audio {
     bellGain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
 
     osc.connect(bellGain);
-    bellGain.connect(this.master);
+    bellGain.connect(this.sfxGain);
 
     osc.start(now);
     osc.stop(now + 1.25);
@@ -939,7 +1057,7 @@ class Audio {
    * Gain ramps from 0.05 to 0.5 over 2s. Lowpass filter at 200Hz.
    */
   playBossWarning(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -976,7 +1094,7 @@ class Audio {
     noise.connect(noiseGain);
     noiseGain.connect(lpf);
     lpf.connect(warnGain);
-    warnGain.connect(this.master);
+    warnGain.connect(this.sfxGain);
 
     osc.start(now);
     osc.stop(now + duration + 0.1);
@@ -994,7 +1112,7 @@ class Audio {
    * Master gain 0.35.
    */
   playBossDefeat(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -1011,7 +1129,7 @@ class Audio {
 
       const layerGain = ctx.createGain();
       layerGain.gain.value = layerGainVal;
-      layerGain.connect(this.master);
+      layerGain.connect(this.sfxGain);
 
       for (let f = 0; f < frequencies.length; f++) {
         const osc = ctx.createOscillator();
@@ -1042,7 +1160,7 @@ class Audio {
    * - Distant crowd murmur: very low brown noise through bandpass 200-600Hz, gain 0.03, looping
    */
   playPortAmbience(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     if (this.portAmbiencePlaying) return;
 
     const ctx = this.ctx;
@@ -1064,7 +1182,7 @@ class Audio {
 
     waveSource.connect(waveLpf);
     waveLpf.connect(waveGain);
-    waveGain.connect(this.master);
+    waveGain.connect(this.sfxGain);
     waveSource.start();
 
     this.portAmbienceSources.push(waveSource);
@@ -1086,7 +1204,7 @@ class Audio {
 
     crowdSource.connect(crowdBpf);
     crowdBpf.connect(crowdGain);
-    crowdGain.connect(this.master);
+    crowdGain.connect(this.sfxGain);
     crowdSource.start();
 
     this.portAmbienceSources.push(crowdSource);
@@ -1094,7 +1212,7 @@ class Audio {
 
     // --- Layer 3: Seagull cries (scheduled randomly) ---
     const scheduleSeagull = () => {
-      if (!this.portAmbiencePlaying || !this.ctx || !this.master) return;
+      if (!this.portAmbiencePlaying || !this.ctx || !this.sfxGain) return;
 
       const now2 = this.ctx.currentTime;
       const freq = 1200 + Math.random() * 1200; // 1200-2400Hz
@@ -1116,7 +1234,7 @@ class Audio {
 
       osc.connect(bpf);
       bpf.connect(gullGain);
-      gullGain.connect(this.master!);
+      gullGain.connect(this.sfxGain!);
 
       osc.start(now2);
       osc.stop(now2 + 0.18);
@@ -1164,13 +1282,13 @@ class Audio {
    * + delayed echo at 0.08s (same but quieter). Gain 0.4.
    */
   playPurchase(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
     const purchaseGain = ctx.createGain();
     purchaseGain.gain.value = 0.4;
-    purchaseGain.connect(this.master);
+    purchaseGain.connect(this.sfxGain);
 
     // First ching
     const osc1 = ctx.createOscillator();
@@ -1206,7 +1324,7 @@ class Audio {
    * Gain 0.8. Very different from thunder (which is long and rumbly).
    */
   playLightningCrack(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -1225,7 +1343,7 @@ class Audio {
 
     noise.connect(shelf);
     shelf.connect(crackGain);
-    crackGain.connect(this.master);
+    crackGain.connect(this.sfxGain);
 
     noise.start(now);
     noise.stop(now + 0.02);
@@ -1240,7 +1358,7 @@ class Audio {
    * Each note 0.12s apart, 0.2s duration. Gain 0.3. Quick and celebratory.
    */
   playWaveComplete(): void {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.sfxGain) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -1250,7 +1368,7 @@ class Audio {
 
     const arpGain = ctx.createGain();
     arpGain.gain.value = 0.3;
-    arpGain.connect(this.master);
+    arpGain.connect(this.sfxGain);
 
     for (let i = 0; i < notes.length; i++) {
       const t = now + i * noteSpacing;
@@ -1270,6 +1388,527 @@ class Audio {
 
       osc.start(t);
       osc.stop(t + noteDuration + 0.01);
+    }
+  }
+
+  // =========================================================================
+  //  SFX: Kraken Rumble
+  // =========================================================================
+
+  /**
+   * Deep 40Hz modulated growl, 2s duration.
+   * Base: sine at 40Hz, gain 0.6
+   * Modulator: sine at 3Hz modulating the gain for growl effect
+   * Brown noise layer through 80Hz lowpass, gain 0.3
+   * Envelope: attack 0.1s, sustain 1.5s, decay 0.4s
+   */
+  playKrakenRumble(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const duration = 2.0;
+
+    // Master envelope for the whole effect
+    const envGain = ctx.createGain();
+    envGain.gain.setValueAtTime(0.001, now);
+    // Attack 0.1s
+    envGain.gain.linearRampToValueAtTime(1.0, now + 0.1);
+    // Sustain until 1.6s
+    envGain.gain.setValueAtTime(1.0, now + 1.6);
+    // Decay 0.4s
+    envGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    envGain.connect(this.sfxGain);
+
+    // --- Layer 1: Base sine at 40Hz with gain modulation ---
+    const baseOsc = ctx.createOscillator();
+    baseOsc.type = 'sine';
+    baseOsc.frequency.value = 40;
+
+    const baseGain = ctx.createGain();
+    baseGain.gain.value = 0.6;
+
+    // Modulator: 3Hz sine modulates the baseGain for growl
+    const modOsc = ctx.createOscillator();
+    modOsc.type = 'sine';
+    modOsc.frequency.value = 3;
+
+    const modGain = ctx.createGain();
+    modGain.gain.value = 0.3; // modulation depth
+
+    modOsc.connect(modGain);
+    modGain.connect(baseGain.gain);
+
+    baseOsc.connect(baseGain);
+    baseGain.connect(envGain);
+
+    // --- Layer 2: Brown noise through 80Hz lowpass ---
+    const noiseBuf = this.createBrownNoiseBuffer(duration + 0.1);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    const noiseLpf = ctx.createBiquadFilter();
+    noiseLpf.type = 'lowpass';
+    noiseLpf.frequency.value = 80;
+    noiseLpf.Q.value = 0.7;
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.value = 0.3;
+
+    noise.connect(noiseLpf);
+    noiseLpf.connect(noiseGain);
+    noiseGain.connect(envGain);
+
+    // Start and stop all nodes
+    baseOsc.start(now);
+    baseOsc.stop(now + duration + 0.1);
+    modOsc.start(now);
+    modOsc.stop(now + duration + 0.1);
+    noise.start(now);
+    noise.stop(now + duration + 0.1);
+  }
+
+  // =========================================================================
+  //  SFX: Ghost Ship Eerie
+  // =========================================================================
+
+  /**
+   * Theremin-like high whistle, 3s duration.
+   * Triangle wave sweeping 800Hz -> 1200Hz -> 600Hz over 3s.
+   * Second triangle at +7Hz detune for beat frequency.
+   * Gain 0.15, slow attack 0.5s, exponential decay.
+   */
+  playGhostShipEerie(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const duration = 3.0;
+
+    // Main oscillator: triangle wave with frequency sweep
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'triangle';
+    osc1.frequency.setValueAtTime(800, now);
+    osc1.frequency.linearRampToValueAtTime(1200, now + 1.5);
+    osc1.frequency.linearRampToValueAtTime(600, now + duration);
+
+    // Second oscillator: +7Hz detune for eerie beat frequency
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(807, now);
+    osc2.frequency.linearRampToValueAtTime(1207, now + 1.5);
+    osc2.frequency.linearRampToValueAtTime(607, now + duration);
+
+    // Envelope: slow attack 0.5s, then exponential decay
+    const eerieGain = ctx.createGain();
+    eerieGain.gain.setValueAtTime(0.001, now);
+    eerieGain.gain.linearRampToValueAtTime(0.15, now + 0.5);
+    eerieGain.gain.setValueAtTime(0.15, now + 1.0);
+    eerieGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    osc1.connect(eerieGain);
+    osc2.connect(eerieGain);
+    eerieGain.connect(this.sfxGain);
+
+    osc1.start(now);
+    osc1.stop(now + duration + 0.1);
+    osc2.start(now);
+    osc2.stop(now + duration + 0.1);
+  }
+
+  // =========================================================================
+  //  SFX: Serpent Hiss
+  // =========================================================================
+
+  /**
+   * Bandpass noise sweep 400->1200Hz, 0.5s.
+   * White noise through bandpass filter.
+   * Center frequency sweeps 400 -> 1200Hz over 0.5s.
+   * Q = 3 for narrow hiss character.
+   * Gain 0.4, fast attack, 0.5s duration.
+   */
+  playSerpentHiss(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const duration = 0.5;
+
+    const noiseBuf = this.createNoiseBuffer(duration + 0.05);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    // Bandpass filter with sweeping center frequency
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 3;
+    bp.frequency.setValueAtTime(400, now);
+    bp.frequency.exponentialRampToValueAtTime(1200, now + duration);
+
+    // Envelope: fast attack, full duration
+    const hissGain = ctx.createGain();
+    hissGain.gain.setValueAtTime(0.001, now);
+    hissGain.gain.linearRampToValueAtTime(0.4, now + 0.02);
+    hissGain.gain.setValueAtTime(0.4, now + duration * 0.6);
+    hissGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    noise.connect(bp);
+    bp.connect(hissGain);
+    hissGain.connect(this.sfxGain);
+
+    noise.start(now);
+    noise.stop(now + duration + 0.05);
+  }
+
+  // =========================================================================
+  //  SFX: Whirlpool Swirl (continuous, stoppable)
+  // =========================================================================
+
+  /**
+   * Low-freq rotation, continuous loop.
+   * Returns { stop: () => void } so caller can stop it.
+   * Oscillator at 60Hz, amplitude modulated by 0.5Hz LFO.
+   * Creates a "whooshing rotation" feel. Gain 0.15.
+   */
+  playWhirlpoolSwirl(): { stop: () => void } {
+    const noop = { stop: () => {} };
+    if (!this.ctx || !this.sfxGain) return noop;
+    const ctx = this.ctx;
+
+    // Main oscillator at 60Hz
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 60;
+
+    // LFO at 0.5Hz for amplitude modulation (rotation feel)
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.5;
+
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.08; // modulation depth
+
+    // Base gain for the swirl
+    const swirlGain = ctx.createGain();
+    swirlGain.gain.value = 0.15;
+
+    // LFO modulates the swirl gain
+    lfo.connect(lfoGain);
+    lfoGain.connect(swirlGain.gain);
+
+    osc.connect(swirlGain);
+    swirlGain.connect(this.sfxGain);
+
+    osc.start();
+    lfo.start();
+
+    return {
+      stop: () => {
+        try { osc.stop(); } catch { /* already stopped */ }
+        try { lfo.stop(); } catch { /* already stopped */ }
+      }
+    };
+  }
+
+  // =========================================================================
+  //  SFX: Treasure Dig
+  // =========================================================================
+
+  /**
+   * 3 thuds + metallic ring, 1s total.
+   * 3 low thuds (80Hz sine, 0.05s each) at 0.0s, 0.25s, 0.5s
+   * Metallic ring at 0.7s: 1200Hz triangle + 1800Hz sine, 0.3s decay
+   * Gain 0.5.
+   */
+  playTreasureDig(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const digGain = ctx.createGain();
+    digGain.gain.value = 0.5;
+    digGain.connect(this.sfxGain);
+
+    // --- 3 low thuds at 0.0s, 0.25s, 0.5s ---
+    const thudTimes = [0, 0.25, 0.5];
+    for (const offset of thudTimes) {
+      const t = now + offset;
+
+      const thudOsc = ctx.createOscillator();
+      thudOsc.type = 'sine';
+      thudOsc.frequency.value = 80;
+
+      const thudGain = ctx.createGain();
+      thudGain.gain.setValueAtTime(0.8, t);
+      thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+
+      thudOsc.connect(thudGain);
+      thudGain.connect(digGain);
+
+      thudOsc.start(t);
+      thudOsc.stop(t + 0.06);
+    }
+
+    // --- Metallic ring at 0.7s ---
+    const ringTime = now + 0.7;
+
+    // Triangle at 1200Hz
+    const ringOsc1 = ctx.createOscillator();
+    ringOsc1.type = 'triangle';
+    ringOsc1.frequency.value = 1200;
+
+    const ringGain1 = ctx.createGain();
+    ringGain1.gain.setValueAtTime(0.6, ringTime);
+    ringGain1.gain.exponentialRampToValueAtTime(0.001, ringTime + 0.3);
+
+    ringOsc1.connect(ringGain1);
+    ringGain1.connect(digGain);
+
+    ringOsc1.start(ringTime);
+    ringOsc1.stop(ringTime + 0.31);
+
+    // Sine at 1800Hz
+    const ringOsc2 = ctx.createOscillator();
+    ringOsc2.type = 'sine';
+    ringOsc2.frequency.value = 1800;
+
+    const ringGain2 = ctx.createGain();
+    ringGain2.gain.setValueAtTime(0.4, ringTime);
+    ringGain2.gain.exponentialRampToValueAtTime(0.001, ringTime + 0.3);
+
+    ringOsc2.connect(ringGain2);
+    ringGain2.connect(digGain);
+
+    ringOsc2.start(ringTime);
+    ringOsc2.stop(ringTime + 0.31);
+  }
+
+  // =========================================================================
+  //  SFX: Victory Fanfare
+  // =========================================================================
+
+  /**
+   * C-F-G-C major chord progression, 3s total.
+   * 4 chords: C major, F major, G major, C major high.
+   * Triangle waves with pseudo-reverb (delayed copies at 0.1s, 0.2s).
+   * Gain 0.35, final chord held longer (1.2s).
+   */
+  playVictoryFanfare(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const chords: number[][] = [
+      [261.63, 329.63, 392],       // C major: C4, E4, G4
+      [349.23, 440, 523.25],       // F major: F4, A4, C5
+      [392, 493.88, 587.33],       // G major: G4, B4, D5
+      [523.25, 659.25, 783.99],    // C major high: C5, E5, G5
+    ];
+
+    const chordDurations = [0.7, 0.7, 0.7, 1.2]; // last chord held longer
+    const chordStarts = [0, 0.7, 1.4, 2.1];
+
+    // Pseudo-reverb: play each chord at 3 time offsets
+    const reverbOffsets = [0, 0.1, 0.2];
+    const reverbGains = [0.35, 0.18, 0.10];
+
+    for (let c = 0; c < chords.length; c++) {
+      const chord = chords[c];
+      const chordStart = now + chordStarts[c];
+      const chordDur = chordDurations[c];
+
+      for (let r = 0; r < reverbOffsets.length; r++) {
+        const offset = reverbOffsets[r];
+        const layerGainVal = reverbGains[r];
+
+        const layerGain = ctx.createGain();
+        layerGain.gain.value = layerGainVal;
+        layerGain.connect(this.sfxGain);
+
+        for (const freq of chord) {
+          const osc = ctx.createOscillator();
+          osc.type = 'triangle';
+          osc.frequency.value = freq;
+
+          const noteGain = ctx.createGain();
+          noteGain.gain.setValueAtTime(0.8, chordStart + offset);
+          noteGain.gain.exponentialRampToValueAtTime(0.001, chordStart + offset + chordDur);
+
+          osc.connect(noteGain);
+          noteGain.connect(layerGain);
+
+          osc.start(chordStart + offset);
+          osc.stop(chordStart + offset + chordDur + 0.01);
+        }
+      }
+    }
+  }
+
+  // =========================================================================
+  //  SFX: Event Warning
+  // =========================================================================
+
+  /**
+   * Rising alarm tone, 1s total.
+   * Sawtooth wave sweeping 200Hz -> 800Hz over 0.5s, repeated 2x.
+   * Through bandpass at 500Hz, Q=2. Gain 0.3.
+   */
+  playEventWarning(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const alarmGain = ctx.createGain();
+    alarmGain.gain.value = 0.3;
+    alarmGain.connect(this.sfxGain);
+
+    // Two sweeps, each 0.5s
+    for (let s = 0; s < 2; s++) {
+      const sweepStart = now + s * 0.5;
+
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, sweepStart);
+      osc.frequency.exponentialRampToValueAtTime(800, sweepStart + 0.5);
+
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 500;
+      bp.Q.value = 2;
+
+      const sweepGain = ctx.createGain();
+      sweepGain.gain.setValueAtTime(0.001, sweepStart);
+      sweepGain.gain.linearRampToValueAtTime(0.8, sweepStart + 0.05);
+      sweepGain.gain.setValueAtTime(0.8, sweepStart + 0.4);
+      sweepGain.gain.exponentialRampToValueAtTime(0.001, sweepStart + 0.5);
+
+      osc.connect(bp);
+      bp.connect(sweepGain);
+      sweepGain.connect(alarmGain);
+
+      osc.start(sweepStart);
+      osc.stop(sweepStart + 0.51);
+    }
+  }
+
+  // =========================================================================
+  //  SFX: Ship Select Hover
+  // =========================================================================
+
+  /**
+   * Click sound, 0.03s duration.
+   * White noise burst through highpass 3000Hz. Gain 0.2.
+   */
+  playShipSelectHover(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const noiseBuf = this.createNoiseBuffer(0.03);
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+
+    const hpf = ctx.createBiquadFilter();
+    hpf.type = 'highpass';
+    hpf.frequency.value = 3000;
+    hpf.Q.value = 0.7;
+
+    const clickGain = ctx.createGain();
+    clickGain.gain.setValueAtTime(0.2, now);
+    clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+
+    noise.connect(hpf);
+    hpf.connect(clickGain);
+    clickGain.connect(this.sfxGain);
+
+    noise.start(now);
+    noise.stop(now + 0.03);
+  }
+
+  // =========================================================================
+  //  SFX: Ship Select Confirm
+  // =========================================================================
+
+  /**
+   * Bell tone, 0.5s duration.
+   * Triangle at 1000Hz + sine at 1500Hz.
+   * Sharp attack, 0.5s exponential decay. Gain 0.3.
+   */
+  playShipSelectConfirm(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const confirmGain = ctx.createGain();
+    confirmGain.gain.value = 0.3;
+    confirmGain.connect(this.sfxGain);
+
+    // Triangle at 1000Hz
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'triangle';
+    osc1.frequency.value = 1000;
+
+    const g1 = ctx.createGain();
+    g1.gain.setValueAtTime(0.8, now);
+    g1.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+    osc1.connect(g1);
+    g1.connect(confirmGain);
+
+    // Sine at 1500Hz
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'sine';
+    osc2.frequency.value = 1500;
+
+    const g2 = ctx.createGain();
+    g2.gain.setValueAtTime(0.6, now);
+    g2.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+    osc2.connect(g2);
+    g2.connect(confirmGain);
+
+    osc1.start(now);
+    osc1.stop(now + 0.51);
+    osc2.start(now);
+    osc2.stop(now + 0.51);
+  }
+
+  // =========================================================================
+  //  SFX: Crew Hire
+  // =========================================================================
+
+  /**
+   * Cheerful chord sting, 0.5s duration.
+   * G4(392) + B4(493.88) + D5(587.33) simultaneous.
+   * Triangle waves, 0.5s with fast attack. Gain 0.3.
+   */
+  playCrewHire(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const hireGain = ctx.createGain();
+    hireGain.gain.value = 0.3;
+    hireGain.connect(this.sfxGain);
+
+    const frequencies = [392, 493.88, 587.33]; // G4, B4, D5
+
+    for (const freq of frequencies) {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+
+      const noteGain = ctx.createGain();
+      noteGain.gain.setValueAtTime(0.001, now);
+      noteGain.gain.linearRampToValueAtTime(0.7, now + 0.01);
+      noteGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+      osc.connect(noteGain);
+      noteGain.connect(hireGain);
+
+      osc.start(now);
+      osc.stop(now + 0.51);
     }
   }
 
@@ -1319,6 +1958,32 @@ class Audio {
 
     // Restart the shanty loop to pick up the new mode immediately
     if (this.musicPlaying) {
+      if (this.musicTimeoutId !== null) {
+        clearTimeout(this.musicTimeoutId);
+        this.musicTimeoutId = null;
+      }
+      this.scheduleShantyBar(0);
+    }
+  }
+
+  // =========================================================================
+  //  MUSIC MODE: Event Mode
+  // =========================================================================
+
+  /**
+   * Switch music to tense/eerie variant for special events.
+   * - 'kraken': Lower tempo (120 BPM), A minor, heavy bass
+   * - 'ghost_ship_event': Very slow (80 BPM), whole-tone scale, ethereal
+   * - 'sea_serpent': Fast (160 BPM), chromatic tension
+   * - null: Return to normal mode
+   * Restarts shanty loop like bossMode does.
+   */
+  setEventMode(type: EventType | null): void {
+    if (this.eventMode === type) return;
+    this.eventMode = type;
+
+    // Restart the shanty loop to pick up the new mode immediately
+    if (this.musicPlaying && this.ctx) {
       if (this.musicTimeoutId !== null) {
         clearTimeout(this.musicTimeoutId);
         this.musicTimeoutId = null;
@@ -1456,6 +2121,49 @@ class Audio {
     if (!this.muted) {
       this.previousVolume = v;
     }
+  }
+
+  // =========================================================================
+  //  VOLUME CONTROL: Separate buses
+  // =========================================================================
+
+  /** Set master volume (0–1). Alias with getter support. */
+  setMasterVolume(vol: number): void {
+    this.setVolume(vol);
+  }
+
+  /** Set music volume (0–1). Controls the music bus gain. */
+  setMusicVolume(vol: number): void {
+    this.musicVolume = Math.min(Math.max(vol, 0), 1);
+    if (this.musicGainNode && this.ctx) {
+      this.musicGainNode.gain.linearRampToValueAtTime(this.musicVolume, this.ctx.currentTime + 0.05);
+    }
+  }
+
+  /** Set SFX volume (0–1). Controls the SFX bus gain. */
+  setSfxVolume(vol: number): void {
+    this.sfxVolume = Math.min(Math.max(vol, 0), 1);
+    if (this.sfxGain && this.ctx) {
+      this.sfxGain.gain.linearRampToValueAtTime(this.sfxVolume, this.ctx.currentTime + 0.05);
+    }
+  }
+
+  /** Get current master volume (0–1). */
+  getMasterVolume(): number {
+    if (this.master) {
+      return this.master.gain.value;
+    }
+    return this.previousVolume;
+  }
+
+  /** Get current music volume (0–1). */
+  getMusicVolume(): number {
+    return this.musicVolume;
+  }
+
+  /** Get current SFX volume (0–1). */
+  getSfxVolume(): number {
+    return this.sfxVolume;
   }
 
   // =========================================================================

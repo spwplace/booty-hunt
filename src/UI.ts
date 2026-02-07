@@ -1,3 +1,5 @@
+import type { ShipClass, ShipClassConfig, RunStats } from './Types';
+
 export class UI {
   private titleEl: HTMLElement;
   private scoreEl: HTMLElement;
@@ -68,6 +70,19 @@ export class UI {
   private actualScore: number = 0;
   private minimapFrame: number = 0;
 
+  // --- New V1 elements ---
+  private shipSelectEl: HTMLElement | null = null;
+  private shipCardsEl: HTMLElement | null = null;
+  private pauseMenuEl: HTMLElement | null = null;
+  private settingsPanelEl: HTMLElement | null = null;
+  private runSummaryEl: HTMLElement | null = null;
+  private crewHudEl: HTMLElement | null = null;
+  private eventWarningEl: HTMLElement | null = null;
+  private eventWarningTimeout: ReturnType<typeof setTimeout> | null = null;
+  private eventTimerEl: HTMLElement | null = null;
+  private treasureMapEl: HTMLElement | null = null;
+  private portCrewHireEl: HTMLElement | null = null;
+
   constructor() {
     this.titleEl = document.getElementById('title')!;
     this.scoreEl = document.getElementById('score')!;
@@ -113,6 +128,18 @@ export class UI {
 
     // Port overlay
     this.portOverlay = document.getElementById('port-overlay');
+
+    // New V1 element lookups
+    this.shipSelectEl = document.getElementById('ship-select');
+    this.shipCardsEl = document.getElementById('ship-cards');
+    this.pauseMenuEl = document.getElementById('pause-menu');
+    this.settingsPanelEl = document.getElementById('settings-panel');
+    this.runSummaryEl = document.getElementById('run-summary');
+    this.crewHudEl = document.getElementById('crew-hud');
+    this.eventWarningEl = document.getElementById('event-warning');
+    this.eventTimerEl = document.getElementById('event-timer');
+    this.treasureMapEl = document.getElementById('treasure-map-indicator');
+    this.portCrewHireEl = document.getElementById('port-crew-hire');
   }
 
   /* ------------------------------------------------------------------ */
@@ -918,5 +945,427 @@ export class UI {
     fill.style.width = `${pct}%`;
     fill.style.backgroundColor = pct > 60 ? '#4caf50' : pct > 30 ? '#ffeb3b' : '#f44336';
     text.textContent = `${current} / ${max} HP`;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  SHIP SELECT SCREEN                                                 */
+  /* ------------------------------------------------------------------ */
+
+  showShipSelect(
+    configs: ShipClassConfig[],
+    onSelect: (cls: ShipClass) => void
+  ): void {
+    if (!this.shipSelectEl) {
+      this.shipSelectEl = document.getElementById('ship-select');
+    }
+    if (!this.shipCardsEl) {
+      this.shipCardsEl = document.getElementById('ship-cards');
+    }
+    if (!this.shipSelectEl || !this.shipCardsEl) return;
+
+    this.shipCardsEl.innerHTML = '';
+
+    for (const cfg of configs) {
+      const card = document.createElement('div');
+      card.className = 'ship-card' + (cfg.locked ? ' locked' : '');
+
+      if (cfg.locked) {
+        card.innerHTML = `
+          <div class="ship-lock-icon">\uD83D\uDD12</div>
+          <div class="ship-icon">${cfg.icon}</div>
+          <div class="ship-name">${cfg.name}</div>
+          <div class="ship-stats">Locked</div>
+          <div class="ship-desc">${cfg.description}</div>
+        `;
+      } else {
+        card.innerHTML = `
+          <div class="ship-icon">${cfg.icon}</div>
+          <div class="ship-name">${cfg.name}</div>
+          <div class="ship-stats">
+            Speed: ${cfg.speed} &bull; HP: ${cfg.hp} &bull; Cannons: ${cfg.cannonsPerSide * 2}
+          </div>
+          <div class="ship-desc">${cfg.description}</div>
+          <button class="ship-select-btn">Select</button>
+        `;
+
+        card.addEventListener('click', () => {
+          onSelect(cfg.id);
+        });
+      }
+
+      this.shipCardsEl.appendChild(card);
+    }
+
+    this.shipSelectEl.style.display = 'flex';
+  }
+
+  hideShipSelect(): void {
+    if (!this.shipSelectEl) {
+      this.shipSelectEl = document.getElementById('ship-select');
+    }
+    if (this.shipSelectEl) {
+      this.shipSelectEl.style.display = 'none';
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  PAUSE MENU                                                         */
+  /* ------------------------------------------------------------------ */
+
+  showPauseMenu(
+    onResume: () => void,
+    onSettings: () => void,
+    onQuit: () => void
+  ): void {
+    if (!this.pauseMenuEl) {
+      this.pauseMenuEl = document.getElementById('pause-menu');
+    }
+    if (!this.pauseMenuEl) return;
+
+    this.pauseMenuEl.style.display = 'flex';
+
+    const resumeBtn = document.getElementById('pause-resume');
+    const settingsBtn = document.getElementById('pause-settings');
+    const quitBtn = document.getElementById('pause-quit');
+
+    if (resumeBtn) {
+      const newBtn = resumeBtn.cloneNode(true) as HTMLElement;
+      resumeBtn.parentNode?.replaceChild(newBtn, resumeBtn);
+      newBtn.addEventListener('click', onResume, { once: true });
+    }
+    if (settingsBtn) {
+      const newBtn = settingsBtn.cloneNode(true) as HTMLElement;
+      settingsBtn.parentNode?.replaceChild(newBtn, settingsBtn);
+      newBtn.addEventListener('click', onSettings, { once: true });
+    }
+    if (quitBtn) {
+      const newBtn = quitBtn.cloneNode(true) as HTMLElement;
+      quitBtn.parentNode?.replaceChild(newBtn, quitBtn);
+      newBtn.addEventListener('click', onQuit, { once: true });
+    }
+  }
+
+  hidePauseMenu(): void {
+    if (!this.pauseMenuEl) {
+      this.pauseMenuEl = document.getElementById('pause-menu');
+    }
+    if (this.pauseMenuEl) {
+      this.pauseMenuEl.style.display = 'none';
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  SETTINGS PANEL                                                     */
+  /* ------------------------------------------------------------------ */
+
+  showSettings(
+    currentSettings: { master: number; music: number; sfx: number; quality: string },
+    onChange: (key: string, value: number | string) => void
+  ): void {
+    if (!this.settingsPanelEl) {
+      this.settingsPanelEl = document.getElementById('settings-panel');
+    }
+    if (!this.settingsPanelEl) return;
+
+    this.settingsPanelEl.style.display = 'flex';
+
+    const volMaster = document.getElementById('vol-master') as HTMLInputElement | null;
+    const volMusic = document.getElementById('vol-music') as HTMLInputElement | null;
+    const volSfx = document.getElementById('vol-sfx') as HTMLInputElement | null;
+    const gfxQuality = document.getElementById('gfx-quality') as HTMLSelectElement | null;
+    const backBtn = document.getElementById('settings-back');
+
+    if (volMaster) {
+      volMaster.value = String(currentSettings.master);
+      volMaster.oninput = () => onChange('master', Number(volMaster.value));
+    }
+    if (volMusic) {
+      volMusic.value = String(currentSettings.music);
+      volMusic.oninput = () => onChange('music', Number(volMusic.value));
+    }
+    if (volSfx) {
+      volSfx.value = String(currentSettings.sfx);
+      volSfx.oninput = () => onChange('sfx', Number(volSfx.value));
+    }
+    if (gfxQuality) {
+      gfxQuality.value = currentSettings.quality;
+      gfxQuality.onchange = () => onChange('quality', gfxQuality.value);
+    }
+    if (backBtn) {
+      const newBtn = backBtn.cloneNode(true) as HTMLElement;
+      backBtn.parentNode?.replaceChild(newBtn, backBtn);
+      newBtn.addEventListener('click', () => this.hideSettings(), { once: true });
+    }
+  }
+
+  hideSettings(): void {
+    if (!this.settingsPanelEl) {
+      this.settingsPanelEl = document.getElementById('settings-panel');
+    }
+    if (this.settingsPanelEl) {
+      this.settingsPanelEl.style.display = 'none';
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  RUN SUMMARY / VICTORY                                              */
+  /* ------------------------------------------------------------------ */
+
+  showRunSummary(stats: RunStats, unlocks: string[]): void {
+    if (!this.runSummaryEl) {
+      this.runSummaryEl = document.getElementById('run-summary');
+    }
+    if (!this.runSummaryEl) return;
+
+    // Title
+    const titleEl = document.getElementById('run-summary-title');
+    if (titleEl) {
+      if (stats.victory) {
+        titleEl.textContent = 'Victory!';
+        titleEl.className = 'victory';
+      } else {
+        titleEl.textContent = 'Ye Been Sunk!';
+        titleEl.className = 'defeat';
+      }
+    }
+
+    // Stats grid
+    const statsEl = document.getElementById('run-stats');
+    if (statsEl) {
+      const minutes = Math.floor(stats.timePlayed / 60);
+      const seconds = Math.floor(stats.timePlayed % 60);
+      const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+      const rows = [
+        ['Gold Earned', stats.gold.toLocaleString()],
+        ['Ships Destroyed', String(stats.shipsDestroyed)],
+        ['Waves Completed', String(stats.wavesCompleted)],
+        ['Max Combo', `${stats.maxCombo}x`],
+        ['Damage Dealt', stats.damageDealt.toLocaleString()],
+        ['Damage Taken', stats.damageTaken.toLocaleString()],
+        ['Events Completed', String(stats.eventsCompleted)],
+        ['Treasures Found', String(stats.treasuresFound)],
+        ['Crew Hired', String(stats.crewHired)],
+        ['Time Played', timeStr],
+        ['Ship Class', stats.shipClass.charAt(0).toUpperCase() + stats.shipClass.slice(1)],
+      ];
+
+      statsEl.innerHTML = rows
+        .map(
+          ([label, value]) => `
+          <div class="run-stat-row">
+            <span class="run-stat-label">${label}</span>
+            <span class="run-stat-value">${value}</span>
+          </div>
+        `
+        )
+        .join('');
+    }
+
+    // Unlock announcements
+    const unlockEl = document.getElementById('unlock-announcements');
+    if (unlockEl) {
+      if (unlocks.length > 0) {
+        unlockEl.innerHTML = unlocks
+          .map((u) => `<div class="unlock-item">Unlocked: ${u}</div>`)
+          .join('');
+      } else {
+        unlockEl.innerHTML = '';
+      }
+    }
+
+    this.runSummaryEl.style.display = 'flex';
+  }
+
+  hideRunSummary(): void {
+    if (!this.runSummaryEl) {
+      this.runSummaryEl = document.getElementById('run-summary');
+    }
+    if (this.runSummaryEl) {
+      this.runSummaryEl.style.display = 'none';
+    }
+  }
+
+  /** Wire up the "Play Again" button in the run summary. */
+  onRunSummaryRestart(callback: () => void): void {
+    const btn = document.getElementById('run-summary-restart');
+    if (btn) {
+      const newBtn = btn.cloneNode(true) as HTMLElement;
+      btn.parentNode?.replaceChild(newBtn, btn);
+      newBtn.addEventListener('click', callback, { once: true });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  CREW HUD                                                           */
+  /* ------------------------------------------------------------------ */
+
+  updateCrewHUD(crew: { role: string; level: number; icon: string }[]): void {
+    if (!this.crewHudEl) {
+      this.crewHudEl = document.getElementById('crew-hud');
+    }
+    if (!this.crewHudEl) return;
+
+    this.crewHudEl.innerHTML = '';
+
+    for (const member of crew) {
+      const el = document.createElement('div');
+      el.className = 'crew-hud-icon';
+      el.title = `${member.role} (Lv ${member.level})`;
+      el.innerHTML = `
+        <span class="crew-emoji">${member.icon}</span>
+        <span class="crew-level">${member.level}</span>
+      `;
+      this.crewHudEl.appendChild(el);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  EVENT WARNING                                                      */
+  /* ------------------------------------------------------------------ */
+
+  showEventWarning(message: string): void {
+    if (!this.eventWarningEl) {
+      this.eventWarningEl = document.getElementById('event-warning');
+    }
+    if (!this.eventWarningEl) return;
+
+    if (this.eventWarningTimeout) {
+      clearTimeout(this.eventWarningTimeout);
+    }
+
+    this.eventWarningEl.textContent = message;
+    this.eventWarningEl.style.display = 'block';
+
+    this.eventWarningTimeout = setTimeout(() => {
+      this.hideEventWarning();
+    }, 3000);
+  }
+
+  hideEventWarning(): void {
+    if (this.eventWarningTimeout) {
+      clearTimeout(this.eventWarningTimeout);
+      this.eventWarningTimeout = null;
+    }
+    if (!this.eventWarningEl) {
+      this.eventWarningEl = document.getElementById('event-warning');
+    }
+    if (this.eventWarningEl) {
+      this.eventWarningEl.style.display = 'none';
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  EVENT TIMER                                                        */
+  /* ------------------------------------------------------------------ */
+
+  showEventTimer(eventName: string, remaining: number, total: number): void {
+    if (!this.eventTimerEl) {
+      this.eventTimerEl = document.getElementById('event-timer');
+    }
+    if (!this.eventTimerEl) return;
+
+    const pct = Math.max(0, Math.min(1, remaining / total)) * 100;
+    const countdownSec = Math.ceil(remaining);
+
+    this.eventTimerEl.style.display = 'block';
+    this.eventTimerEl.innerHTML = `
+      <div class="event-timer-name">${eventName}</div>
+      <div class="event-timer-track">
+        <div class="event-timer-fill" style="width:${pct}%"></div>
+      </div>
+      <div class="event-timer-countdown">${countdownSec}s</div>
+    `;
+  }
+
+  hideEventTimer(): void {
+    if (!this.eventTimerEl) {
+      this.eventTimerEl = document.getElementById('event-timer');
+    }
+    if (this.eventTimerEl) {
+      this.eventTimerEl.style.display = 'none';
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  TREASURE MAP INDICATOR                                             */
+  /* ------------------------------------------------------------------ */
+
+  showTreasureMapIndicator(): void {
+    if (!this.treasureMapEl) {
+      this.treasureMapEl = document.getElementById('treasure-map-indicator');
+    }
+    if (this.treasureMapEl) {
+      this.treasureMapEl.style.display = 'block';
+    }
+  }
+
+  hideTreasureMapIndicator(): void {
+    if (!this.treasureMapEl) {
+      this.treasureMapEl = document.getElementById('treasure-map-indicator');
+    }
+    if (this.treasureMapEl) {
+      this.treasureMapEl.style.display = 'none';
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  PORT CREW HIRING                                                   */
+  /* ------------------------------------------------------------------ */
+
+  showPortCrewHire(
+    availableRoles: {
+      role: string;
+      name: string;
+      icon: string;
+      cost: number;
+      bonusPerLevel: string;
+    }[],
+    gold: number,
+    onHire: (role: string) => void
+  ): void {
+    if (!this.portCrewHireEl) {
+      this.portCrewHireEl = document.getElementById('port-crew-hire');
+    }
+    if (!this.portCrewHireEl) return;
+
+    this.portCrewHireEl.innerHTML = '';
+
+    const heading = document.createElement('h3');
+    heading.textContent = 'Tavern - Hire Crew';
+    this.portCrewHireEl.appendChild(heading);
+
+    const container = document.createElement('div');
+    container.className = 'crew-hire-cards';
+
+    for (const role of availableRoles) {
+      const card = document.createElement('div');
+      const canAfford = gold >= role.cost;
+      card.className = 'crew-hire-card' + (canAfford ? '' : ' disabled');
+
+      card.innerHTML = `
+        <div class="hire-icon">${role.icon}</div>
+        <div class="hire-name">${role.name}</div>
+        <div class="hire-bonus">${role.bonusPerLevel}</div>
+        <div class="hire-cost">${role.cost}g</div>
+      `;
+
+      if (canAfford) {
+        card.addEventListener('click', () => onHire(role.role));
+      }
+
+      container.appendChild(card);
+    }
+
+    this.portCrewHireEl.appendChild(container);
+  }
+
+  hidePortCrewHire(): void {
+    if (!this.portCrewHireEl) {
+      this.portCrewHireEl = document.getElementById('port-crew-hire');
+    }
+    if (this.portCrewHireEl) {
+      this.portCrewHireEl.innerHTML = '';
+    }
   }
 }
