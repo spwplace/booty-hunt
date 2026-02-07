@@ -261,7 +261,7 @@ export interface Island {
 }
 
 // ===================================================================
-//  Wave Config V1 (5-wave arc)
+//  Wave Config V1 (15-wave, 3-act arc)
 // ===================================================================
 
 export interface WaveConfigV1 {
@@ -279,16 +279,24 @@ export interface WaveConfigV1 {
 }
 
 export const WAVE_TABLE: WaveConfigV1[] = [
-  // W1: Easy intro — unarmed merchants, clear skies
-  { wave: 1, totalShips: 4,  armedPercent: 0,    speedMultiplier: 1.0,  healthMultiplier: 1.0,  weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon'],                                                              bossName: null,              bossHp: 0,   isPortWave: false, specialEvent: null },
-  // W2: First challenge — some armed escorts, fog rolls in
-  { wave: 2, totalShips: 5,  armedPercent: 0.20, speedMultiplier: 1.10, healthMultiplier: 1.15, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                                             bossName: null,              bossHp: 0,   isPortWave: false, specialEvent: null },
-  // W3: Mid-game boss + port visit, storm, ghost event
-  { wave: 3, totalShips: 6,  armedPercent: 0.35, speedMultiplier: 1.20, healthMultiplier: 1.30, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'ghost_ship'],                                bossName: 'Captain Blackbeard', bossHp: 300, isPortWave: true,  specialEvent: 'ghost_ship_event' },
-  // W4: Night assault — fire ships, navy, sea serpent event
-  { wave: 4, totalShips: 7,  armedPercent: 0.50, speedMultiplier: 1.35, healthMultiplier: 1.50, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],  bossName: null,              bossHp: 0,   isPortWave: false, specialEvent: 'sea_serpent' },
-  // W5: Final wave — storm, all enemy types, final boss
-  { wave: 5, totalShips: 8,  armedPercent: 0.60, speedMultiplier: 1.50, healthMultiplier: 1.70, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],  bossName: 'Admiral Drake',   bossHp: 500, isPortWave: false, specialEvent: 'kraken' },
+  // ── Act 1: Open Waters (waves 1-5) — sloops, galleons, frigates only ──
+  { wave: 1,  totalShips: 4,  armedPercent: 0,    speedMultiplier: 1.00, healthMultiplier: 1.00, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon'],                                              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 2,  totalShips: 5,  armedPercent: 0.10, speedMultiplier: 1.05, healthMultiplier: 1.05, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 3,  totalShips: 5,  armedPercent: 0.20, speedMultiplier: 1.10, healthMultiplier: 1.10, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 4,  totalShips: 6,  armedPercent: 0.25, speedMultiplier: 1.15, healthMultiplier: 1.15, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 5,  totalShips: 7,  armedPercent: 0.30, speedMultiplier: 1.25, healthMultiplier: 1.25, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: 'Captain Blackbeard', bossHp: 300, isPortWave: true,  specialEvent: null },
+  // ── Act 2: Contested Seas (waves 6-10) — fire ships & ghost ships enter ──
+  { wave: 6,  totalShips: 7,  armedPercent: 0.30, speedMultiplier: 1.25, healthMultiplier: 1.30, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship'],              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 7,  totalShips: 8,  armedPercent: 0.35, speedMultiplier: 1.30, healthMultiplier: 1.35, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship'],              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: 'ghost_ship_event' },
+  { wave: 8,  totalShips: 8,  armedPercent: 0.40, speedMultiplier: 1.35, healthMultiplier: 1.40, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship'], bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: 'sea_serpent' },
+  { wave: 9,  totalShips: 9,  armedPercent: 0.50, speedMultiplier: 1.45, healthMultiplier: 1.50, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship'], bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 10, totalShips: 10, armedPercent: 0.55, speedMultiplier: 1.55, healthMultiplier: 1.55, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship'], bossName: 'Dread Commodore',    bossHp: 550, isPortWave: true,  specialEvent: null },
+  // ── Act 3: The Gauntlet (waves 11-15) — navy warships, all 6 types ──
+  { wave: 11, totalShips: 10, armedPercent: 0.55, speedMultiplier: 1.55, healthMultiplier: 1.60, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: null,             bossHp: 0,   isPortWave: false, specialEvent: 'storm_surge' },
+  { wave: 12, totalShips: 11, armedPercent: 0.60, speedMultiplier: 1.65, healthMultiplier: 1.70, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: null,             bossHp: 0,   isPortWave: false, specialEvent: 'whirlpool' },
+  { wave: 13, totalShips: 12, armedPercent: 0.65, speedMultiplier: 1.75, healthMultiplier: 1.80, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: null,             bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 14, totalShips: 13, armedPercent: 0.70, speedMultiplier: 1.85, healthMultiplier: 1.90, weather: 'night',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: null,             bossHp: 0,   isPortWave: false, specialEvent: 'kraken' },
+  { wave: 15, totalShips: 14, armedPercent: 0.75, speedMultiplier: 2.00, healthMultiplier: 2.00, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'], bossName: 'Admiral Drake',  bossHp: 800, isPortWave: false, specialEvent: null },
 ];
 
 // ===================================================================
@@ -308,6 +316,29 @@ export interface RunStats {
   timePlayed: number;
   shipClass: ShipClass;
   victory: boolean;
+}
+
+export interface RunHistoryEntry {
+  date: string;            // ISO date
+  shipClass: ShipClass;
+  doctrine: string;
+  seed: number;
+  victory: boolean;
+  wavesCompleted: number;
+  gold: number;
+  shipsDestroyed: number;
+  maxCombo: number;
+  damageDealt: number;
+  timePlayed: number;
+}
+
+export type ColorblindMode = 'off' | 'protanopia' | 'deuteranopia' | 'tritanopia';
+
+export interface AccessibilitySettings {
+  textScale: number;
+  motionIntensity: number;
+  flashIntensity: number;
+  colorblindMode: ColorblindMode;
 }
 
 // ===================================================================
@@ -374,6 +405,11 @@ export interface SaveDataV1 {
   musicVolume: number;
   sfxVolume: number;
   graphicsQuality: 'low' | 'medium' | 'high';
+  // Accessibility
+  textScale: number;
+  motionIntensity: number;
+  flashIntensity: number;
+  colorblindMode: ColorblindMode;
   // V2 meta progression
   v2CodexDiscovered: string[];
   v2FactionReputation: Record<string, number>;

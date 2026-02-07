@@ -7,11 +7,12 @@ const TUTORIAL_STEPS = [
   'Press Q or E to fire cannons',
   'Sail close to damaged ships to capture them',
   'Choose an upgrade to power up',
-  'Survive 5 waves to claim victory!',
+  'Survive 15 waves across 3 acts to claim victory!',
 ];
 
 export class TutorialSystem {
   private currentStep: number;
+  private started: boolean;
   private completed: boolean;
   private skipped: boolean;
   private stepWaitTimer: number;
@@ -23,6 +24,7 @@ export class TutorialSystem {
 
   constructor() {
     this.currentStep = 0;
+    this.started = false;
     this.completed = false;
     this.skipped = false;
     this.stepWaitTimer = 0;
@@ -31,7 +33,11 @@ export class TutorialSystem {
   /* ---- public API ---- */
 
   isActive(): boolean {
-    return !this.completed && !this.skipped;
+    return this.started && !this.completed && !this.skipped;
+  }
+
+  hasEnded(): boolean {
+    return this.started && !this.isActive();
   }
 
   getCurrentStep(): number {
@@ -86,19 +92,11 @@ export class TutorialSystem {
   }
 
   /**
-   * Tick the tutorial timer. The final step auto-dismisses after 3s.
+   * Tick the tutorial timer.
    */
   update(dt: number): void {
     if (!this.isActive()) return;
-
-    // Final step: auto-advance after 3 seconds
-    if (this.currentStep === 4) {
-      this.stepWaitTimer += dt;
-      if (this.stepWaitTimer >= 3) {
-        this.completed = true;
-        this.hideUI();
-      }
-    }
+    // Auto-advance removed to prevent "auto-dismissing" behavior
   }
 
   skip(): void {
@@ -112,6 +110,7 @@ export class TutorialSystem {
 
   reset(): void {
     this.currentStep = 0;
+    this.started = false;
     this.completed = false;
     this.skipped = false;
     this.stepWaitTimer = 0;
@@ -121,6 +120,7 @@ export class TutorialSystem {
 
   /** Call once at game start to wire up and show step 0 */
   start(): void {
+    this.started = true;
     this.ensureElements();
     this.refreshUI();
   }
@@ -151,6 +151,12 @@ export class TutorialSystem {
 
     this.overlay.style.display = 'flex';
     this.textEl.textContent = TUTORIAL_STEPS[this.currentStep];
+
+    if (this.currentStep === TUTORIAL_STEPS.length - 1 && this.skipBtn) {
+      this.skipBtn.textContent = 'Got it!';
+    } else if (this.skipBtn) {
+      this.skipBtn.textContent = 'Skip Tutorial';
+    }
   }
 
   private hideUI(): void {

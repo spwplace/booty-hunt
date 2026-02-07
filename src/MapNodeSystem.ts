@@ -5,56 +5,209 @@ export type MapNodeType = 'combat' | 'event' | 'port' | 'contract' | 'boss';
 export interface MapNode {
   id: string;
   act: number;
-  index: number;
+  layer: number;           // 0-4 within the act
   type: MapNodeType;
   regionId: string;
   label: string;
+  connections: string[];   // forward-edge node IDs
+  visited: boolean;
 }
+
+export interface MapAct {
+  actNumber: number;
+  layers: MapNode[][];     // layers[0..4], each has 1-3 nodes
+}
+
+export interface MapGraph {
+  acts: MapAct[];
+  currentNodeId: string | null;
+}
+
+export interface MapNodeSnapshot {
+  seed: number;
+  currentNodeId: string | null;
+  visitedNodeIds: string[];
+}
+
+// Node type pools per act (weighted — more entries = higher chance)
+const ACT_POOLS: MapNodeType[][] = [
+  ['combat', 'combat', 'event', 'port'],              // Act 1: guaranteed port
+  ['combat', 'event', 'contract', 'port', 'combat'],  // Act 2: guaranteed port
+  ['combat', 'combat', 'contract', 'event', 'combat'],// Act 3: no guaranteed port
+];
+
+// Acts 1 and 2 guarantee at least one port in layers 1-3
+const GUARANTEE_PORT = [true, true, false];
 
 export class MapNodeSystem {
   private readonly content: V2ContentRegistry;
-  private nodes: MapNode[] = [];
-  private pointer = 0;
+  private acts: MapAct[] = [];
+  private currentNodeId: string | null = null;
+  private nodeMap: Map<string, MapNode> = new Map();
+  private seed = 0;
 
   constructor(content: V2ContentRegistry) {
     this.content = content;
   }
 
   reset(): void {
-    this.nodes = [];
-    this.pointer = 0;
+    this.acts = [];
+    this.currentNodeId = null;
+    this.nodeMap = new Map();
   }
+
+  /* ------------------------------------------------------------------ */
+  /*  Run generation                                                     */
+  /* ------------------------------------------------------------------ */
 
   startRun(seed: number): void {
     this.reset();
+    this.seed = seed;
 
     const regionCycle = this.buildRegionCycle(seed);
-    const plan: MapNodeType[][] = [
-      ['combat', 'event', 'combat', 'port', 'boss'],
-      ['combat', 'contract', 'event', 'combat', 'boss'],
-      ['combat', 'event', 'contract', 'combat', 'boss'],
+    // Act 1 → regions[0,1], Act 2 → regions[2,3], Act 3 → regions[3,4]
+    const actRegions: string[][] = [
+      regionCycle.slice(0, 2),
+      regionCycle.slice(2, 4),
+      regionCycle.slice(3, 5),
     ];
 
-    let counter = 0;
-    for (let act = 0; act < plan.length; act++) {
-      for (let i = 0; i < plan[act].length; i++) {
-        const regionId = regionCycle[(counter + i) % regionCycle.length];
-        const type = plan[act][i];
-        this.nodes.push({
-          id: `a${act + 1}-n${i + 1}`,
-          act: act + 1,
-          index: i,
-          type,
-          regionId,
-          label: this.labelForNode(type, act + 1, i + 1),
-        });
+    for (let a = 0; a < 3; a++) {
+      const act = this.generateAct(a + 1, actRegions[a], seed + a * 1000);
+      this.acts.push(act);
+    }
+
+    // Connect boss of act K to entry of act K+1
+    for (let a = 0; a < this.acts.length - 1; a++) {
+      const bossLayer = this.acts[a].layers[4];
+      const nextEntry = this.acts[a + 1].layers[0];
+      for (const boss of bossLayer) {
+        for (const entry of nextEntry) {
+          boss.connections.push(entry.id);
+        }
       }
-      counter += plan[act].length;
+    }
+
+    // Build flat lookup map
+    for (const act of this.acts) {
+      for (const layer of act.layers) {
+        for (const node of layer) {
+          this.nodeMap.set(node.id, node);
+        }
+      }
+    }
+
+    // Auto-select the first node (act 1, layer 0)
+    const firstNode = this.acts[0].layers[0][0];
+    if (firstNode) {
+      this.currentNodeId = firstNode.id;
+      firstNode.visited = true;
     }
   }
 
+  private generateAct(actNum: number, regions: string[], seed: number): MapAct {
+    const layers: MapNode[][] = [];
+    let rng = this.seededRng(seed);
+
+    // Layer 0: single combat entry
+    layers.push([this.makeNode(actNum, 0, 0, 'combat', regions[0])]);
+
+    // Layers 1-3: 2-3 branching nodes
+    const pool = ACT_POOLS[actNum - 1];
+    let portPlaced = false;
+
+    for (let L = 1; L <= 3; L++) {
+      const count = rng() < 0.4 ? 3 : 2;
+      const layerNodes: MapNode[] = [];
+
+      for (let i = 0; i < count; i++) {
+        const regionId = regions[i % regions.length];
+        let type = pool[Math.floor(rng() * pool.length)];
+
+        // Force a port in layer 3 if act guarantees one and none placed yet
+        if (L === 3 && !portPlaced && GUARANTEE_PORT[actNum - 1] && i === count - 1) {
+          type = 'port';
+        }
+        if (type === 'port') portPlaced = true;
+
+        layerNodes.push(this.makeNode(actNum, L, i, type, regionId));
+      }
+      layers.push(layerNodes);
+    }
+
+    // Layer 4: single boss
+    layers.push([this.makeNode(actNum, 4, 0, 'boss', regions[0])]);
+
+    // Wire connections between adjacent layers
+    for (let L = 0; L < layers.length - 1; L++) {
+      this.wireLayer(layers[L], layers[L + 1], rng);
+    }
+
+    return { actNumber: actNum, layers };
+  }
+
+  private wireLayer(from: MapNode[], to: MapNode[], rng: () => number): void {
+    // Ensure every 'to' node has at least one incoming edge
+    const incoming = new Set<string>();
+
+    // Each 'from' node connects to 1-2 'to' nodes
+    for (const src of from) {
+      const connectCount = to.length === 1 ? 1 : (rng() < 0.5 ? 2 : 1);
+      const shuffled = [...to].sort(() => rng() - 0.5);
+      for (let i = 0; i < Math.min(connectCount, shuffled.length); i++) {
+        src.connections.push(shuffled[i].id);
+        incoming.add(shuffled[i].id);
+      }
+    }
+
+    // Patch: ensure all 'to' nodes are reachable
+    for (const dst of to) {
+      if (!incoming.has(dst.id)) {
+        const src = from[Math.floor(rng() * from.length)];
+        src.connections.push(dst.id);
+      }
+    }
+  }
+
+  private makeNode(act: number, layer: number, index: number, type: MapNodeType, regionId: string): MapNode {
+    return {
+      id: `a${act}-L${layer}-${index}`,
+      act,
+      layer,
+      type,
+      regionId,
+      label: this.labelForNode(type, act, layer),
+      connections: [],
+      visited: false,
+    };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Navigation                                                         */
+  /* ------------------------------------------------------------------ */
+
+  /** Select a specific node by ID. Marks it visited and sets it as current. */
+  selectNode(nodeId: string): MapNode | null {
+    const node = this.nodeMap.get(nodeId);
+    if (!node) return null;
+    node.visited = true;
+    this.currentNodeId = nodeId;
+    return node;
+  }
+
+  /** Get nodes the player can move to from the current node. */
+  getAvailableNextNodes(): MapNode[] {
+    if (!this.currentNodeId) return [];
+    const current = this.nodeMap.get(this.currentNodeId);
+    if (!current) return [];
+    return current.connections
+      .map((id) => this.nodeMap.get(id))
+      .filter((n): n is MapNode => n != null);
+  }
+
   getCurrentNode(): MapNode | null {
-    return this.nodes[this.pointer] ?? null;
+    if (!this.currentNodeId) return null;
+    return this.nodeMap.get(this.currentNodeId) ?? null;
   }
 
   getCurrentRegion(): V2Region | null {
@@ -63,16 +216,56 @@ export class MapNodeSystem {
     return this.content.getRegion(node.regionId);
   }
 
+  /** Backward-compatible: advance to the first available next node. */
   advanceNode(): MapNode | null {
-    if (this.pointer < this.nodes.length) {
-      this.pointer++;
+    const available = this.getAvailableNextNodes();
+    if (available.length > 0) {
+      return this.selectNode(available[0].id);
     }
-    return this.getCurrentNode();
+    return null;
   }
 
-  getUpcoming(count = 3): MapNode[] {
-    return this.nodes.slice(this.pointer, this.pointer + count);
+  /** Return the full graph for UI rendering. */
+  getGraph(): MapGraph {
+    return {
+      acts: this.acts,
+      currentNodeId: this.currentNodeId,
+    };
   }
+
+  getSnapshot(): MapNodeSnapshot {
+    const visitedNodeIds: string[] = [];
+    for (const [id, node] of this.nodeMap) {
+      if (node.visited) visitedNodeIds.push(id);
+    }
+    return {
+      seed: this.seed,
+      currentNodeId: this.currentNodeId,
+      visitedNodeIds,
+    };
+  }
+
+  restoreSnapshot(snapshot: MapNodeSnapshot): void {
+    this.startRun(snapshot.seed);
+    const visited = new Set(snapshot.visitedNodeIds);
+    for (const [id, node] of this.nodeMap) {
+      node.visited = visited.has(id);
+    }
+    if (snapshot.currentNodeId && this.nodeMap.has(snapshot.currentNodeId)) {
+      this.currentNodeId = snapshot.currentNodeId;
+      const current = this.nodeMap.get(snapshot.currentNodeId);
+      if (current) current.visited = true;
+    }
+  }
+
+  /** Get a node by ID. */
+  getNode(id: string): MapNode | null {
+    return this.nodeMap.get(id) ?? null;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Helpers                                                            */
+  /* ------------------------------------------------------------------ */
 
   private buildRegionCycle(seed: number): string[] {
     const regions = [...this.content.data.regions];
@@ -84,16 +277,24 @@ export class MapNodeSystem {
       regions[i] = regions[j];
       regions[j] = tmp;
     }
-    return regions.map(region => region.id);
+    return regions.map((region) => region.id);
   }
 
-  private labelForNode(type: MapNodeType, act: number, n: number): string {
+  private labelForNode(type: MapNodeType, act: number, layer: number): string {
     switch (type) {
-      case 'combat': return `Act ${act} Engagement ${n}`;
-      case 'event': return `Act ${act} Sea Event ${n}`;
-      case 'port': return `Act ${act} Port Call ${n}`;
-      case 'contract': return `Act ${act} Contract ${n}`;
+      case 'combat': return `Act ${act} Engagement`;
+      case 'event': return `Act ${act} Sea Event`;
+      case 'port': return `Act ${act} Port Call`;
+      case 'contract': return `Act ${act} Contract`;
       case 'boss': return `Act ${act} Flagship Clash`;
     }
+  }
+
+  private seededRng(seed: number): () => number {
+    let s = seed | 0;
+    return () => {
+      s = (s * 1664525 + 1013904223) | 0;
+      return (s >>> 0) / 4294967296;
+    };
   }
 }

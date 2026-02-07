@@ -15,7 +15,14 @@ concurrency:
 
 jobs:
   build-and-deploy:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
+    env:
+      DEV: "true"
+      VITE_DEV: "true"
+      VITE_ENABLE_DEV_PANEL: "1"
+      VITE_ENABLE_SCENARIO_EDITOR: "1"
+      VITE_ENABLE_TELEMETRY_EXPORT: "1"
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -30,6 +37,8 @@ jobs:
 
       # Build latest from dev branch
       - run: npm ci
+      - run: npm run lint
+      - run: npm run test
       - run: npm run build
       - run: mv dist latest-build
 

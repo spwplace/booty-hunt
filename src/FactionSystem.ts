@@ -58,4 +58,14 @@ export class FactionSystem {
     }
     return snapshot;
   }
+
+  applyReputationSnapshot(snapshot: Record<string, number>): void {
+    this.reset();
+    for (const faction of this.content.data.factions) {
+      const value = snapshot[faction.id];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        this.reputation.set(faction.id, value);
+      }
+    }
+  }
 }

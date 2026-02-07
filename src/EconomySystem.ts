@@ -21,6 +21,12 @@ export class EconomySystem {
     return { ...this.state };
   }
 
+  applyState(state: RunEconomyState): void {
+    this.state.supplies = Math.max(0, Math.round(state.supplies));
+    this.state.intel = Math.max(0, Math.round(state.intel));
+    this.state.reputationTokens = Math.max(0, Math.round(state.reputationTokens));
+  }
+
   addSupplies(amount: number): void {
     this.state.supplies = Math.max(0, this.state.supplies + amount);
   }

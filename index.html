@@ -2,12 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Booty Hunt</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Pirata+One&display=swap" rel="stylesheet" />
   <style>
+    :root {
+      --bh-text-scale: 1;
+      --bh-flash-intensity: 1;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
       overflow: hidden;
@@ -20,15 +24,31 @@
       position: fixed;
       width: 100%; height: 100%;
     }
+    html { font-size: calc(16px * var(--bh-text-scale)); }
     body { cursor: crosshair; }
     #game { width: 100%; height: 100%; }
     canvas { display: block; width: 100%; height: 100%; }
+    body[data-colorblind="protanopia"] #game canvas { filter: contrast(1.05) saturate(0.82) hue-rotate(-20deg); }
+    body[data-colorblind="deuteranopia"] #game canvas { filter: contrast(1.03) saturate(0.78) hue-rotate(18deg); }
+    body[data-colorblind="tritanopia"] #game canvas { filter: contrast(1.04) saturate(0.75) hue-rotate(55deg); }
 
     #ui {
+      --ui-scale: 1;
       position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
+      top: 0;
+      left: 0;
+      width: calc(100% / var(--ui-scale));
+      height: calc(100% / var(--ui-scale));
+      transform-origin: top left;
+      transform: scale(var(--ui-scale));
       pointer-events: none;
       font-family: 'Pirata One', cursive, serif;
+    }
+    button:focus-visible,
+    select:focus-visible,
+    input[type="range"]:focus-visible {
+      outline: 2px solid #ffd700;
+      outline-offset: 2px;
     }
 
     /* ---- Title Screen ---- */
@@ -76,10 +96,89 @@
       letter-spacing: 0.05em;
       pointer-events: auto;
     }
-    #screensaver-btn:hover, #editor-btn:hover {
+    #screensaver-btn:hover, #resume-btn:hover, #editor-btn:hover, #history-btn:hover {
       border-color: rgba(255, 215, 0, 0.6);
       color: #FFD700;
       background: rgba(255, 215, 0, 0.08);
+    }
+    #resume-btn {
+      display: none;
+      margin: 0.5rem auto 0;
+      padding: 0.5rem 1.5rem;
+      background: transparent;
+      border: 1px solid rgba(255, 215, 0, 0.3);
+      color: rgba(255, 215, 0, 0.6);
+      font-family: 'Pirata One', 'Georgia', serif;
+      font-size: clamp(0.7rem, 2vw, 0.95rem);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      letter-spacing: 0.05em;
+      pointer-events: auto;
+    }
+    #history-btn {
+      display: block;
+      margin: 0.5rem auto 0;
+      padding: 0.5rem 1.5rem;
+      background: transparent;
+      border: 1px solid rgba(255, 215, 0, 0.3);
+      color: rgba(255, 215, 0, 0.6);
+      font-family: 'Pirata One', 'Georgia', serif;
+      font-size: clamp(0.7rem, 2vw, 0.95rem);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      letter-spacing: 0.05em;
+      pointer-events: auto;
+    }
+    #run-history-panel {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.94);
+      z-index: 120;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Pirata One', cursive;
+      pointer-events: auto;
+      overflow-y: auto;
+    }
+    .history-title {
+      font-size: 1.8rem;
+      color: #FFD700;
+      margin-bottom: 1rem;
+    }
+    .history-table {
+      width: min(95vw, 700px);
+      border-collapse: collapse;
+    }
+    .history-table th {
+      color: rgba(255,255,255,0.5);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255,215,0,0.2);
+      text-align: left;
+    }
+    .history-table td {
+      color: rgba(255,255,255,0.85);
+      font-size: 0.85rem;
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .history-table .victory-cell { color: #4caf50; }
+    .history-table .defeat-cell { color: #f44336; }
+    .history-close {
+      margin-top: 1rem;
+      font-family: 'Pirata One', cursive;
+      font-size: 1.1rem;
+      color: #FFD700;
+      background: rgba(255,215,0,0.1);
+      border: 1px solid rgba(255,215,0,0.4);
+      border-radius: 6px;
+      padding: 8px 24px;
+      cursor: pointer;
+      pointer-events: auto;
     }
     #editor-btn {
       display: block;
@@ -1312,6 +1411,197 @@
       line-height: 1.36;
     }
 
+    /* ---- Map Choice Panel ---- */
+    #map-panel {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 122;
+      background: radial-gradient(ellipse at 50% 30%, rgba(8,18,32,0.92), rgba(2,4,8,0.96));
+      pointer-events: auto;
+      padding: 18px;
+      font-family: 'Pirata One', cursive;
+    }
+    .map-act-banner {
+      color: #FFD700;
+      font-size: clamp(1.2rem, 4vw, 2rem);
+      text-shadow: 2px 2px 0 #000, 0 0 16px rgba(255,200,0,0.3);
+      margin-bottom: 0.6rem;
+      letter-spacing: 0.04em;
+    }
+    .map-act-subtitle {
+      color: rgba(255,255,255,0.55);
+      font-size: 0.88rem;
+      font-family: 'Cinzel', serif;
+      margin-bottom: 1.4rem;
+    }
+    .map-cards {
+      display: flex;
+      gap: 1.2rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      padding: 0 1rem;
+    }
+    .map-card {
+      width: 210px;
+      padding: 1.2rem 1rem;
+      background: rgba(40,20,10,0.88);
+      border: 2px solid rgba(255,215,0,0.25);
+      border-radius: 12px;
+      text-align: center;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+      font-family: 'Pirata One', cursive;
+    }
+    .map-card:hover {
+      transform: scale(1.06) translateY(-3px);
+      border-color: #FFD700;
+      box-shadow: 0 0 28px rgba(255,200,0,0.25), 0 8px 28px rgba(0,0,0,0.5);
+    }
+    .map-card-icon {
+      font-size: 2.4rem;
+      margin-bottom: 0.4rem;
+    }
+    .map-card-type {
+      color: #FFD700;
+      font-size: 1.15rem;
+      margin-bottom: 0.25rem;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .map-card-region {
+      color: rgba(255,255,255,0.7);
+      font-size: 0.82rem;
+      margin-bottom: 0.15rem;
+      font-family: 'Cinzel', serif;
+    }
+    .map-card-faction {
+      color: rgba(255,200,100,0.6);
+      font-size: 0.72rem;
+      font-family: 'Cinzel', serif;
+      margin-bottom: 0.4rem;
+    }
+    .map-card-hint {
+      color: rgba(255,255,255,0.5);
+      font-size: 0.74rem;
+      line-height: 1.3;
+      font-family: 'Cinzel', serif;
+    }
+    .map-toggle-btn {
+      margin-top: 1.2rem;
+      background: rgba(255,215,0,0.08);
+      border: 1px solid rgba(255,215,0,0.25);
+      border-radius: 6px;
+      color: rgba(255,215,0,0.6);
+      font-family: 'Pirata One', cursive;
+      font-size: 0.82rem;
+      padding: 4px 14px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .map-toggle-btn:hover {
+      color: #FFD700;
+      border-color: rgba(255,215,0,0.5);
+    }
+
+    /* ---- Mini-Map (collapsible DAG overview) ---- */
+    #run-map {
+      margin-top: 1rem;
+      display: none;
+      overflow-x: auto;
+      max-width: min(900px, 96vw);
+      padding: 12px 8px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,215,0,0.12);
+      border-radius: 8px;
+    }
+    #run-map.show { display: block; }
+    .minimap-acts {
+      display: flex;
+      gap: 0;
+      min-width: max-content;
+    }
+    .minimap-act {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .minimap-act-label {
+      color: rgba(255,215,0,0.5);
+      font-size: 0.62rem;
+      font-family: 'Pirata One', cursive;
+      margin-bottom: 4px;
+      white-space: nowrap;
+    }
+    .minimap-act-divider {
+      width: 1px;
+      align-self: stretch;
+      background: rgba(255,215,0,0.15);
+      margin: 0 6px;
+    }
+    .minimap-layers {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .minimap-layer {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      min-width: 32px;
+    }
+    .minimap-node {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.55rem;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      background: rgba(30,30,40,0.7);
+      color: rgba(255,255,255,0.5);
+      transition: border-color 0.3s, background 0.3s;
+    }
+    .minimap-node.visited {
+      border-color: rgba(255,215,0,0.4);
+      background: rgba(60,40,10,0.6);
+      color: rgba(255,215,0,0.7);
+    }
+    .minimap-node.current {
+      border-color: #FFD700;
+      background: rgba(100,70,10,0.8);
+      color: #FFD700;
+      box-shadow: 0 0 8px rgba(255,200,0,0.4);
+    }
+    .minimap-node.available {
+      border-color: rgba(100,200,255,0.6);
+      animation: map-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes map-pulse {
+      0%, 100% { box-shadow: 0 0 4px rgba(100,200,255,0.2); }
+      50% { box-shadow: 0 0 10px rgba(100,200,255,0.5); }
+    }
+    .minimap-edge {
+      position: absolute;
+      height: 1px;
+      background: rgba(255,255,255,0.12);
+      transform-origin: left center;
+      pointer-events: none;
+    }
+    .minimap-edge.visited {
+      background: rgba(255,215,0,0.3);
+    }
+
+    @media (max-width: 600px) {
+      .map-cards { flex-direction: column; align-items: center; }
+      .map-card { width: min(280px, 90vw); }
+    }
+
     /* ---- Run Summary / Victory Screen ---- */
     #run-summary {
       position: fixed;
@@ -1383,9 +1673,21 @@
       pointer-events: auto;
       transition: transform 0.2s, box-shadow 0.2s;
     }
-    #run-summary-restart:hover {
+    #run-summary-restart:hover, #run-summary-endless:hover {
       transform: scale(1.05);
       box-shadow: 0 0 25px rgba(255,200,0,0.4);
+    }
+    #run-summary-endless {
+      font-family: 'Pirata One', cursive;
+      font-size: 1.5rem;
+      color: #4fc3f7;
+      background: rgba(10,20,40,0.9);
+      border: 2px solid #4fc3f7;
+      border-radius: 8px;
+      padding: 0.8rem 2.5rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, box-shadow 0.2s;
     }
 
     /* ---- Crew HUD ---- */
@@ -1656,6 +1958,12 @@
       #minimap-container { width: 70px; height: 70px; top: 28px; right: 12px; }
       #captains-log { top: 48px; font-size: 0.75rem; padding: 6px 8px; }
     }
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1665,9 +1973,12 @@
       <h1>Booty Hunt</h1>
       <p class="subtitle">The ocean be vast... but so be yer greed</p>
       <p class="hint" id="title-hint">Press any key to set sail</p>
-      <button id="screensaver-btn">Watch the Seas</button>
-      <button id="editor-btn" onmousedown="window.__enterEditor?.()">Level Editor</button>
+      <button id="screensaver-btn" type="button">Watch the Seas</button>
+      <button id="resume-btn" type="button">Resume Voyage</button>
+      <button id="history-btn" type="button">Past Voyages</button>
+      <button id="editor-btn" type="button" style="display:none;">Level Editor</button>
     </div>
+    <div id="run-history-panel" style="display:none;"></div>
     <div id="score"><span class="label">Gold Plundered</span>0</div>
     <div id="combo"></div>
     <div id="v2-resources"></div>
@@ -1686,14 +1997,14 @@
     <div id="capture-text"></div>
     <div id="spyglass-vignette"></div>
     <div id="spyglass-hint">Hold right side for spyglass</div>
-    <div id="controls">
-      WASD - Sail<br/>
-      Q / E - Cannons<br/>
-      SPACE - Spyglass<br/>
-      C - Codex<br/>
-      M - Mute<br/>
-      X - Export Telemetry
-    </div>
+      <div id="controls">
+        WASD - Sail<br/>
+        Q / E - Cannons<br/>
+        SPACE - Spyglass<br/>
+        ESC - Pause<br/>
+        C - Codex<br/>
+        M - Mute
+      </div>
     <button id="codex-toggle" type="button">Codex (C)</button>
     <div id="health-bar"><div id="health-fill"></div></div>
     <div id="wave-counter"></div>
@@ -1712,7 +2023,7 @@
 
     <!-- Wave Preview -->
     <div id="wave-preview"></div>
-    <div id="captains-log"></div>
+    <div id="captains-log" aria-live="polite" aria-atomic="true"></div>
 
     <!-- Minimap -->
     <div id="minimap-container">
@@ -1753,37 +2064,58 @@
     </div>
 
     <!-- Pause Menu -->
-    <div id="pause-menu" style="display:none;">
-      <h2>Paused</h2>
-      <button id="pause-resume">Resume</button>
-      <button id="pause-settings">Settings</button>
-      <button id="pause-quit">Quit to Title</button>
+    <div id="pause-menu" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="pause-menu-title">
+      <h2 id="pause-menu-title">Paused</h2>
+      <button id="pause-resume" type="button">Resume</button>
+      <button id="pause-settings" type="button">Settings</button>
+      <button id="pause-quit" type="button">Quit to Title</button>
     </div>
 
     <!-- Settings Panel -->
-    <div id="settings-panel" style="display:none;">
-      <h2>Settings</h2>
+    <div id="settings-panel" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h2 id="settings-title">Settings</h2>
       <div class="setting-row">
-        <label>Master Volume</label>
+        <label for="vol-master">Master Volume</label>
         <input type="range" id="vol-master" min="0" max="100" value="100">
       </div>
       <div class="setting-row">
-        <label>Music Volume</label>
+        <label for="vol-music">Music Volume</label>
         <input type="range" id="vol-music" min="0" max="100" value="100">
       </div>
       <div class="setting-row">
-        <label>SFX Volume</label>
+        <label for="vol-sfx">SFX Volume</label>
         <input type="range" id="vol-sfx" min="0" max="100" value="100">
       </div>
       <div class="setting-row">
-        <label>Graphics Quality</label>
+        <label for="gfx-quality">Graphics Quality</label>
         <select id="gfx-quality">
           <option value="low">Low</option>
           <option value="medium" selected>Medium</option>
           <option value="high">High</option>
         </select>
       </div>
-      <button id="settings-back">Back</button>
+      <div class="setting-row">
+        <label for="acc-text-scale">Text Scale</label>
+        <input type="range" id="acc-text-scale" min="80" max="140" value="100">
+      </div>
+      <div class="setting-row">
+        <label for="acc-motion">Motion Intensity</label>
+        <input type="range" id="acc-motion" min="0" max="100" value="100">
+      </div>
+      <div class="setting-row">
+        <label for="acc-flash">Flash Intensity</label>
+        <input type="range" id="acc-flash" min="0" max="100" value="100">
+      </div>
+      <div class="setting-row">
+        <label for="acc-colorblind">Colorblind Mode</label>
+        <select id="acc-colorblind">
+          <option value="off" selected>Off</option>
+          <option value="protanopia">Protanopia</option>
+          <option value="deuteranopia">Deuteranopia</option>
+          <option value="tritanopia">Tritanopia</option>
+        </select>
+      </div>
+      <button id="settings-back" type="button">Back</button>
     </div>
 
     <div id="codex-panel" style="display:none;">
@@ -1797,22 +2129,28 @@
 
     <div id="choice-panel" style="display:none;"></div>
 
+    <!-- Map Choice Panel -->
+    <div id="map-panel" style="display:none;"></div>
+
     <!-- Run Summary / Victory Screen -->
     <div id="run-summary" style="display:none;">
       <h2 id="run-summary-title">Ye Been Sunk!</h2>
       <div id="run-stats"></div>
       <div id="unlock-announcements"></div>
-      <button id="run-summary-restart">Play Again</button>
+      <div style="display:flex; gap:1rem; justify-content:center; flex-wrap:wrap;">
+        <button id="run-summary-restart">Play Again</button>
+        <button id="run-summary-endless" style="display:none;">Endless Mode</button>
+      </div>
     </div>
 
     <!-- Crew HUD -->
     <div id="crew-hud"></div>
 
     <!-- Event Warning -->
-    <div id="event-warning" style="display:none;"></div>
+    <div id="event-warning" style="display:none;" aria-live="assertive"></div>
 
     <!-- Event Timer -->
-    <div id="event-timer" style="display:none;"></div>
+    <div id="event-timer" style="display:none;" aria-live="polite"></div>
 
     <!-- Treasure Map Indicator -->
     <div id="treasure-map-indicator" style="display:none;">Treasure Map!</div>

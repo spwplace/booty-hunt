@@ -31,7 +31,7 @@ class LowHealthVignette {
     this.el = makeOverlay('low-health-vignette');
   }
 
-  update(dt: number, healthPercent: number): void {
+  update(dt: number, healthPercent: number, flashIntensity: number): void {
     if (healthPercent >= 30) {
       this.el.style.opacity = '0';
       this.el.style.boxShadow = 'none';
@@ -46,7 +46,7 @@ class LowHealthVignette {
     const baseOpacity = 0.3 + severity * 0.4;
     const pulseAmplitude = 0.15 + severity * 0.15;
     const opacity = baseOpacity + Math.sin(this.time * pulseRate * Math.PI * 2) * pulseAmplitude;
-    const clamped = Math.max(0, Math.min(1, opacity));
+    const clamped = Math.max(0, Math.min(1, opacity)) * flashIntensity;
 
     this.el.style.opacity = '1';
     this.el.style.boxShadow = `inset 0 0 80px 40px rgba(255,0,0,${clamped.toFixed(3)})`;
@@ -118,9 +118,9 @@ class HitDirectionIndicator {
     }
   }
 
-  trigger(direction: HitDirection): void {
+  trigger(direction: HitDirection, intensity = 1): void {
     this.timers[direction] = HitDirectionIndicator.FADE_DURATION;
-    this.edges[direction].style.opacity = String(HitDirectionIndicator.PEAK_OPACITY);
+    this.edges[direction].style.opacity = String(HitDirectionIndicator.PEAK_OPACITY * intensity);
   }
 
   update(dt: number): void {
@@ -182,9 +182,9 @@ class DamageFlash {
     this.el.style.backgroundColor = 'red';
   }
 
-  trigger(): void {
+  trigger(intensity = 1): void {
     this.timer = DamageFlash.DURATION;
-    this.el.style.opacity = String(DamageFlash.PEAK_OPACITY);
+    this.el.style.opacity = String(DamageFlash.PEAK_OPACITY * intensity);
   }
 
   update(dt: number): void {
@@ -214,9 +214,9 @@ class ComboFlash {
     this.el.style.backgroundColor = 'rgba(255,215,0,0.3)';
   }
 
-  trigger(): void {
+  trigger(intensity = 1): void {
     this.timer = ComboFlash.DURATION;
-    this.el.style.opacity = '1';
+    this.el.style.opacity = String(Math.max(0, Math.min(1, intensity)));
   }
 
   update(dt: number): void {
@@ -242,6 +242,7 @@ class ScreenJuice {
   slowMotion: SlowMotion;
   damageFlash: DamageFlash;
   comboFlash: ComboFlash;
+  private flashIntensity = 1;
 
   constructor() {
     this.lowHealthVignette = new LowHealthVignette();
@@ -253,7 +254,7 @@ class ScreenJuice {
 
   /** Updates all sub-effects. dt is REAL (unscaled) delta time. Returns current timeScale. */
   update(dt: number, healthPercent: number): number {
-    this.lowHealthVignette.update(dt, healthPercent);
+    this.lowHealthVignette.update(dt, healthPercent, this.flashIntensity);
     this.hitIndicator.update(dt);
     this.damageFlash.update(dt);
     this.comboFlash.update(dt);
@@ -262,21 +263,25 @@ class ScreenJuice {
 
   /** Triggers damage flash + optional hit direction indicator. */
   triggerDamage(direction?: HitDirection): void {
-    this.damageFlash.trigger();
+    this.damageFlash.trigger(this.flashIntensity);
     if (direction) {
-      this.hitIndicator.trigger(direction);
+      this.hitIndicator.trigger(direction, this.flashIntensity);
     }
   }
 
   /** Triggers gold combo flash. */
   triggerCombo(): void {
-    this.comboFlash.trigger();
+    this.comboFlash.trigger(this.flashIntensity);
   }
 
   /** Triggers slow-motion ramp + combo flash for a dramatic kill. */
   triggerDramaticKill(): void {
     this.slowMotion.triggerDramaticKill();
-    this.comboFlash.trigger();
+    this.comboFlash.trigger(this.flashIntensity);
+  }
+
+  setFlashIntensity(value: number): void {
+    this.flashIntensity = Math.max(0, Math.min(1, value));
   }
 }
 

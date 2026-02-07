@@ -46,6 +46,13 @@ function createDefaultBonus(): CrewBonus {
   };
 }
 
+export interface CrewMemberSnapshot {
+  role: CrewRole;
+  level: number;
+  maxLevel: number;
+  name: string;
+}
+
 // ---------------------------------------------------------------------------
 // CrewSystem
 // ---------------------------------------------------------------------------
@@ -65,6 +72,33 @@ export class CrewSystem {
 
   getCrew(): CrewMember[] {
     return [...this.crew];
+  }
+
+  getSnapshot(): CrewMemberSnapshot[] {
+    return this.crew.map(member => ({ ...member }));
+  }
+
+  restoreSnapshot(snapshot: CrewMemberSnapshot[]): void {
+    this.crew = [];
+    for (const raw of snapshot) {
+      if (!raw || typeof raw !== 'object') continue;
+      if (!(raw.role in CREW_ROLE_CONFIGS)) continue;
+      const role = raw.role as CrewRole;
+      const config = CREW_ROLE_CONFIGS[role];
+      const level = Number.isFinite(raw.level)
+        ? Math.max(1, Math.min(config.maxLevel, Math.round(raw.level)))
+        : 1;
+      const name = typeof raw.name === 'string' && raw.name.trim()
+        ? raw.name.slice(0, 48)
+        : generatePirateName();
+      this.crew.push({
+        role,
+        level,
+        maxLevel: config.maxLevel,
+        name,
+      });
+      if (this.crew.length >= this.maxSlots) break;
+    }
   }
 
   /**

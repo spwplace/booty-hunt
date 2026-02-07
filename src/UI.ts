@@ -1,4 +1,6 @@
-import type { ShipClass, ShipClassConfig, RunStats } from './Types';
+import { WAVE_TABLE } from './Types';
+import type { ShipClass, ShipClassConfig, RunStats, RunHistoryEntry } from './Types';
+import type { MapNode, MapGraph } from './MapNodeSystem';
 
 type CaptainLogTone = 'neutral' | 'warning' | 'reward' | 'mystic';
 
@@ -195,6 +197,7 @@ export class UI {
     this.minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement | null;
     if (this.minimapCanvas) {
       this.minimapCtx = this.minimapCanvas.getContext('2d');
+      this.syncMinimapCanvasSize();
     }
 
     // Synergy popup
@@ -226,6 +229,26 @@ export class UI {
   /* ------------------------------------------------------------------ */
   /*  ORIGINAL METHODS - preserved with identical behavior               */
   /* ------------------------------------------------------------------ */
+
+  private syncMinimapCanvasSize(): void {
+    if (!this.minimapCanvas) return;
+    const targetW = Math.max(1, Math.round(this.minimapCanvas.clientWidth || this.minimapCanvas.width || 130));
+    const targetH = Math.max(1, Math.round(this.minimapCanvas.clientHeight || this.minimapCanvas.height || 130));
+    if (this.minimapCanvas.width !== targetW || this.minimapCanvas.height !== targetH) {
+      this.minimapCanvas.width = targetW;
+      this.minimapCanvas.height = targetH;
+    }
+  }
+
+  private ensureMinimapReady(): boolean {
+    if (!this.minimapCanvas || !this.minimapCtx) {
+      this.minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement | null;
+      if (this.minimapCanvas) this.minimapCtx = this.minimapCanvas.getContext('2d');
+    }
+    if (!this.minimapCanvas || !this.minimapCtx) return false;
+    this.syncMinimapCanvasSize();
+    return true;
+  }
 
   hideTitle() {
     this.titleEl.style.opacity = '0';
@@ -276,7 +299,7 @@ export class UI {
     this.captureEl.classList.add('show');
     this.captureTimeout = setTimeout(() => {
       this.captureEl.classList.remove('show');
-    }, 1400);
+    }, 3000);
 
     // Combo display
     if (combo > 1) {
@@ -348,11 +371,11 @@ export class UI {
     // Fade in
     this.waveAnnounce.classList.add('show');
 
-    // Hold 2s then fade out
+    // Hold 4s then fade out
     this.waveAnnounceTimeout = setTimeout(() => {
       this.waveAnnounce?.classList.remove('show');
       this.waveAnnounceTimeout = null;
-    }, 2000);
+    }, 4000);
   }
 
   updateWaveCounter(wave: number, shipsLeft: number, shipsTotal: number) {
@@ -457,16 +480,21 @@ export class UI {
   /* ------------------------------------------------------------------ */
 
   showGameOver(
-    score: number,
-    wave: number,
+    stats: RunStats,
     highScore: number,
-    highWave: number
+    highWave: number,
+    seed?: number,
   ): Promise<void> {
     return new Promise<void>((resolve) => {
       if (!this.gameOverEl) {
         resolve();
         return;
       }
+
+      const minutes = Math.floor(stats.timePlayed / 60);
+      const seconds = Math.floor(stats.timePlayed % 60);
+      const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+      const seedStr = seed != null ? seed.toString(16).toUpperCase() : null;
 
       // Build content
       this.gameOverEl.innerHTML = `
@@ -475,13 +503,37 @@ export class UI {
           <div class="game-over-stats">
             <div class="stat-row">
               <span class="stat-label">Final Score</span>
-              <span class="stat-value">${score.toLocaleString()}</span>
+              <span class="stat-value">${stats.gold.toLocaleString()}</span>
             </div>
             <div class="stat-row">
               <span class="stat-label">Wave Reached</span>
-              <span class="stat-value">${wave}</span>
+              <span class="stat-value">${stats.wavesCompleted} of ${WAVE_TABLE.length}</span>
             </div>
             <div class="stat-row">
+              <span class="stat-label">Ships Destroyed</span>
+              <span class="stat-value">${stats.shipsDestroyed}</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">Max Combo</span>
+              <span class="stat-value">${stats.maxCombo}x</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">Damage Dealt</span>
+              <span class="stat-value">${stats.damageDealt.toLocaleString()}</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">Damage Taken</span>
+              <span class="stat-value">${stats.damageTaken.toLocaleString()}</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">Time Played</span>
+              <span class="stat-value">${timeStr}</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">Ship Class</span>
+              <span class="stat-value">${stats.shipClass.charAt(0).toUpperCase() + stats.shipClass.slice(1)}</span>
+            </div>
+            <div class="stat-row" style="border-top:1px solid rgba(255,215,0,0.25);margin-top:4px;padding-top:8px;">
               <span class="stat-label">High Score</span>
               <span class="stat-value">${highScore.toLocaleString()}</span>
             </div>
@@ -489,6 +541,7 @@ export class UI {
               <span class="stat-label">Best Wave</span>
               <span class="stat-value">${highWave}</span>
             </div>
+            ${seedStr ? `<div class="stat-row"><span class="stat-label">Seed</span><span class="stat-value" style="font-size:0.9rem;letter-spacing:0.08em;">${seedStr}</span></div>` : ''}
           </div>
           <button id="restart-btn" class="restart-btn">Set Sail Again</button>
         </div>
@@ -510,7 +563,6 @@ export class UI {
           { once: true }
         );
       } else {
-        // Fallback if button somehow doesn't exist
         resolve();
       }
     });
@@ -663,11 +715,35 @@ export class UI {
   /*  WAVE PREVIEW                                                       */
   /* ------------------------------------------------------------------ */
 
+  private static readonly HAZARD_LABELS: Record<string, string> = {
+    fire_reef: 'Fire Reefs',
+    ash_fog: 'Ashfall',
+    phantom_current: 'Phantom Currents',
+    grave_fog: 'Fog of the Dead',
+    mine_chain: 'Minefields',
+    patrol_net: 'Patrol Net',
+    serpent_nest: 'Serpent Nest',
+    storm_wall: 'Storm Wall',
+    abyss_vent: 'Abyss Vents',
+    mega_swell: 'Mega Swells',
+  };
+
+  private static readonly ENEMY_TYPE_LABELS: Record<string, string> = {
+    merchant_sloop: 'Sloop',
+    merchant_galleon: 'Galleon',
+    escort_frigate: 'Frigate',
+    fire_ship: 'Fire Ship',
+    ghost_ship: 'Ghost Ship',
+    navy_warship: 'Warship',
+  };
+
   showWavePreview(
     wave: number,
     weather: string,
     totalShips: number,
     armedPercent: number,
+    hazards?: string[],
+    enemyTypes?: string[],
   ) {
     if (!this.wavePreview) {
       this.wavePreview = document.getElementById('wave-preview');
@@ -683,11 +759,19 @@ export class UI {
 
     const emoji = weatherEmoji[weather] || '';
     const weatherLabel = weather.charAt(0).toUpperCase() + weather.slice(1);
+    const hazardStr = hazards && hazards.length > 0
+      ? `<div style="font-size:13px;color:#ff9966;margin-top:2px;">${hazards.map(h => UI.HAZARD_LABELS[h] ?? h).join(' / ')}</div>`
+      : '';
+    const enemyStr = enemyTypes && enemyTypes.length > 0
+      ? `<div style="font-size:13px;color:#4fc3f7;margin-top:2px;">${enemyTypes.map(t => UI.ENEMY_TYPE_LABELS[t] ?? t).join(', ')}</div>`
+      : '';
 
     this.wavePreview.innerHTML = `
       <div style="font-size:16px;color:#ccc;">
         ${emoji} ${weatherLabel} &mdash; ${totalShips} Ships &mdash; ${Math.round(armedPercent * 100)}% Armed
       </div>
+      ${hazardStr}
+      ${enemyStr}
     `;
 
     this.wavePreview.style.display = 'flex';
@@ -717,36 +801,33 @@ export class UI {
     this.minimapFrame++;
     if (this.minimapFrame % 3 !== 0) return;
 
-    if (!this.minimapCanvas || !this.minimapCtx) {
-      this.minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement | null;
-      if (this.minimapCanvas) this.minimapCtx = this.minimapCanvas.getContext('2d');
-      if (!this.minimapCanvas || !this.minimapCtx) return;
-    }
-
+    if (!this.ensureMinimapReady() || !this.minimapCanvas || !this.minimapCtx) return;
+    const mapScale = Math.min(this.minimapCanvas.width, this.minimapCanvas.height) / 130;
     const ctx = this.minimapCtx;
-    const w = 130;
-    const h = 130;
+    const w = this.minimapCanvas.width;
+    const h = this.minimapCanvas.height;
     const cx = w / 2;
     const cy = h / 2;
-    const scale = 0.5; // 1 unit = ~0.5px
+    const radius = Math.min(cx, cy);
+    const scale = 0.5 * mapScale; // Keep world range consistent as minimap size changes
 
     // Clear with dark translucent background
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = 'rgba(0, 10, 20, 0.75)';
     ctx.beginPath();
-    ctx.arc(cx, cy, cx, 0, Math.PI * 2);
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
     ctx.fill();
 
     // Range circle
     ctx.strokeStyle = 'rgba(100, 180, 255, 0.2)';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = Math.max(1, mapScale);
     ctx.beginPath();
-    ctx.arc(cx, cy, cx - 4, 0, Math.PI * 2);
+    ctx.arc(cx, cy, radius - 4 * mapScale, 0, Math.PI * 2);
     ctx.stroke();
 
     // Inner range circle (half)
     ctx.beginPath();
-    ctx.arc(cx, cy, (cx - 4) / 2, 0, Math.PI * 2);
+    ctx.arc(cx, cy, (radius - 4 * mapScale) / 2, 0, Math.PI * 2);
     ctx.stroke();
 
     // Entity dots
@@ -758,10 +839,10 @@ export class UI {
 
       // Skip if outside minimap circle (unless cursed compass shows all)
       const distFromCenter = Math.sqrt((ex - cx) ** 2 + (ey - cy) ** 2);
-      if (distFromCenter > cx - 4) {
+      if (distFromCenter > radius - 4 * mapScale) {
         if (!cursedCompass) continue;
         // Clamp to edge for cursed compass
-        const clampDist = cx - 6;
+        const clampDist = radius - 6 * mapScale;
         const angle = Math.atan2(ey - cy, ex - cx);
         // Draw as small indicator at edge -- handled below with clamped coords
         if (e.type === 'boss') ctx.fillStyle = '#ff1744';
@@ -770,7 +851,7 @@ export class UI {
         else ctx.fillStyle = '#ffffff';
         ctx.globalAlpha = 0.5;
         ctx.beginPath();
-        ctx.arc(cx + Math.cos(angle) * clampDist, cy + Math.sin(angle) * clampDist, 2, 0, Math.PI * 2);
+        ctx.arc(cx + Math.cos(angle) * clampDist, cy + Math.sin(angle) * clampDist, 2 * mapScale, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
         continue;
@@ -779,22 +860,22 @@ export class UI {
       if (e.type === 'boss') {
         ctx.fillStyle = '#ff1744';
         ctx.beginPath();
-        ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+        ctx.arc(ex, ey, 4 * mapScale, 0, Math.PI * 2);
         ctx.fill();
       } else if (e.type === 'escort') {
         ctx.fillStyle = '#ff5252';
         ctx.beginPath();
-        ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+        ctx.arc(ex, ey, 2.5 * mapScale, 0, Math.PI * 2);
         ctx.fill();
       } else if (e.type === 'island') {
         ctx.fillStyle = 'rgba(198, 173, 127, 0.9)';
         ctx.beginPath();
-        ctx.arc(ex, ey, 2.2, 0, Math.PI * 2);
+        ctx.arc(ex, ey, 2.2 * mapScale, 0, Math.PI * 2);
         ctx.fill();
       } else {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
         ctx.beginPath();
-        ctx.arc(ex, ey, 2, 0, Math.PI * 2);
+        ctx.arc(ex, ey, 2 * mapScale, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -805,9 +886,9 @@ export class UI {
     ctx.rotate(playerAngle);
     ctx.fillStyle = '#ffd700';
     ctx.beginPath();
-    ctx.moveTo(0, -6);
-    ctx.lineTo(-4, 4);
-    ctx.lineTo(4, 4);
+    ctx.moveTo(0, -6 * mapScale);
+    ctx.lineTo(-4 * mapScale, 4 * mapScale);
+    ctx.lineTo(4 * mapScale, 4 * mapScale);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -843,7 +924,7 @@ export class UI {
           if (this.synergyPopup) this.synergyPopup.style.display = 'none';
         }, 500);
       }
-    }, 2000);
+    }, 5000);
   }
 
   /* ------------------------------------------------------------------ */
@@ -1136,7 +1217,7 @@ export class UI {
     configs: ShipClassConfig[],
     doctrines: DoctrineSetupOption[],
     defaults: { shipClass: ShipClass; doctrineId: string },
-    onStart: (shipClass: ShipClass, doctrineId: string) => void,
+    onStart: (shipClass: ShipClass, doctrineId: string, seed?: number) => void,
   ): void {
     if (!this.shipSelectEl) {
       this.shipSelectEl = document.getElementById('ship-select');
@@ -1160,6 +1241,24 @@ export class UI {
         <section>
           <div style="color:#9fd6ff;font-size:1rem;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">Starting Doctrine</div>
           <div id="run-setup-doctrines" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;"></div>
+        </section>
+        <section>
+          <div style="color:rgba(255,255,255,0.5);font-size:0.85rem;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:6px;">Seed (optional)</div>
+          <div style="display:flex;justify-content:center;">
+            <input id="run-setup-seed" type="text" placeholder="Random" maxlength="8" spellcheck="false" autocomplete="off" style="
+              font-family:monospace;
+              font-size:1rem;
+              color:#ffd700;
+              background:rgba(255,215,0,0.08);
+              border:1px solid rgba(255,215,0,0.3);
+              border-radius:6px;
+              padding:6px 12px;
+              width:140px;
+              text-align:center;
+              letter-spacing:0.12em;
+              text-transform:uppercase;
+            " />
+          </div>
         </section>
         <div style="display:flex;justify-content:center;margin-top:4px;">
           <button id="run-setup-start" type="button" style="
@@ -1251,7 +1350,13 @@ export class UI {
 
     renderShips();
     renderDoctrines();
-    startBtn.addEventListener('click', () => onStart(selectedShip, selectedDoctrine), { once: true });
+    startBtn.addEventListener('click', () => {
+      const seedInput = document.getElementById('run-setup-seed') as HTMLInputElement | null;
+      const seedText = seedInput?.value.trim() ?? '';
+      const parsedSeed = seedText ? parseInt(seedText, 16) : undefined;
+      const seed = parsedSeed && !isNaN(parsedSeed) ? parsedSeed : undefined;
+      onStart(selectedShip, selectedDoctrine, seed);
+    }, { once: true });
     this.shipSelectEl.style.display = 'flex';
   }
 
@@ -1313,6 +1418,63 @@ export class UI {
   }
 
   /* ------------------------------------------------------------------ */
+  /*  RUN HISTORY                                                        */
+  /* ------------------------------------------------------------------ */
+
+  showRunHistory(history: RunHistoryEntry[]): void {
+    const panel = document.getElementById('run-history-panel');
+    if (!panel) return;
+
+    if (history.length === 0) {
+      panel.innerHTML = `
+        <div class="history-title">Past Voyages</div>
+        <div style="color:rgba(255,255,255,0.5);font-size:1rem;margin-bottom:1.5rem;">No voyages yet. Set sail to make history!</div>
+        <button class="history-close" id="history-close">Back</button>
+      `;
+    } else {
+      const rows = history.map(r => {
+        const d = new Date(r.date);
+        const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+        const mins = Math.floor(r.timePlayed / 60);
+        const secs = Math.floor(r.timePlayed % 60);
+        const cls = r.shipClass.charAt(0).toUpperCase() + r.shipClass.slice(1);
+        const outcomeClass = r.victory ? 'victory-cell' : 'defeat-cell';
+        const outcome = r.victory ? 'Victory' : `W${r.wavesCompleted}`;
+        const seedHex = r.seed.toString(16).toUpperCase();
+        return `<tr>
+          <td>${dateStr}</td>
+          <td class="${outcomeClass}">${outcome}</td>
+          <td>${cls}</td>
+          <td>${r.gold.toLocaleString()}</td>
+          <td>${r.shipsDestroyed}</td>
+          <td>${r.maxCombo}x</td>
+          <td>${mins}:${secs.toString().padStart(2, '0')}</td>
+          <td style="font-family:monospace;font-size:0.75rem;letter-spacing:0.08em;">${seedHex}</td>
+        </tr>`;
+      }).join('');
+
+      panel.innerHTML = `
+        <div class="history-title">Past Voyages</div>
+        <table class="history-table">
+          <thead><tr>
+            <th>Date</th><th>Result</th><th>Ship</th><th>Gold</th><th>Sunk</th><th>Combo</th><th>Time</th><th>Seed</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <button class="history-close" id="history-close">Back</button>
+      `;
+    }
+
+    panel.style.display = 'flex';
+    const closeBtn = document.getElementById('history-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        panel.style.display = 'none';
+      }, { once: true });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
   /*  PAUSE MENU                                                         */
   /* ------------------------------------------------------------------ */
 
@@ -1363,7 +1525,16 @@ export class UI {
   /* ------------------------------------------------------------------ */
 
   showSettings(
-    currentSettings: { master: number; music: number; sfx: number; quality: string },
+    currentSettings: {
+      master: number;
+      music: number;
+      sfx: number;
+      quality: string;
+      textScale: number;
+      motionIntensity: number;
+      flashIntensity: number;
+      colorblindMode: string;
+    },
     onChange: (key: string, value: number | string) => void
   ): void {
     if (!this.settingsPanelEl) {
@@ -1377,6 +1548,10 @@ export class UI {
     const volMusic = document.getElementById('vol-music') as HTMLInputElement | null;
     const volSfx = document.getElementById('vol-sfx') as HTMLInputElement | null;
     const gfxQuality = document.getElementById('gfx-quality') as HTMLSelectElement | null;
+    const textScale = document.getElementById('acc-text-scale') as HTMLInputElement | null;
+    const motionIntensity = document.getElementById('acc-motion') as HTMLInputElement | null;
+    const flashIntensity = document.getElementById('acc-flash') as HTMLInputElement | null;
+    const colorblindMode = document.getElementById('acc-colorblind') as HTMLSelectElement | null;
     const backBtn = document.getElementById('settings-back');
 
     if (volMaster) {
@@ -1394,6 +1569,22 @@ export class UI {
     if (gfxQuality) {
       gfxQuality.value = currentSettings.quality;
       gfxQuality.onchange = () => onChange('quality', gfxQuality.value);
+    }
+    if (textScale) {
+      textScale.value = String(Math.round(currentSettings.textScale * 100));
+      textScale.oninput = () => onChange('textScale', Number(textScale.value) / 100);
+    }
+    if (motionIntensity) {
+      motionIntensity.value = String(Math.round(currentSettings.motionIntensity * 100));
+      motionIntensity.oninput = () => onChange('motionIntensity', Number(motionIntensity.value) / 100);
+    }
+    if (flashIntensity) {
+      flashIntensity.value = String(Math.round(currentSettings.flashIntensity * 100));
+      flashIntensity.oninput = () => onChange('flashIntensity', Number(flashIntensity.value) / 100);
+    }
+    if (colorblindMode) {
+      colorblindMode.value = currentSettings.colorblindMode;
+      colorblindMode.onchange = () => onChange('colorblindMode', colorblindMode.value);
     }
     if (backBtn) {
       const newBtn = backBtn.cloneNode(true) as HTMLElement;
@@ -1463,6 +1654,150 @@ export class UI {
     if (!this.choicePanelEl) return;
     this.choicePanelEl.style.display = 'none';
     this.choicePanelEl.innerHTML = '';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  MAP CHOICE                                                         */
+  /* ------------------------------------------------------------------ */
+
+  private mapPanelEl: HTMLElement | null = null;
+
+  private static ACT_TITLES = ['Open Waters', 'Contested Seas', 'The Gauntlet'];
+
+  private static NODE_ICONS: Record<string, string> = {
+    combat: '\u2694\uFE0F',    // crossed swords
+    event: '\uD83D\uDCDC',     // scroll
+    port: '\u2693',            // anchor
+    contract: '\uD83E\uDD1D',  // handshake
+    boss: '\uD83D\uDC80',      // skull
+  };
+
+  private static NODE_HINTS: Record<string, string> = {
+    combat: 'Hostile waters ahead',
+    event: 'Mysterious encounter',
+    port: 'Safe harbor — repairs & crew',
+    contract: 'Faction contract — risk & reward',
+    boss: 'Flagship battle',
+  };
+
+  private static WEATHER_ICONS: Record<string, string> = {
+    clear: '\u2600\uFE0F',
+    foggy: '\uD83C\uDF2B\uFE0F',
+    stormy: '\u26C8\uFE0F',
+    night: '\uD83C\uDF19',
+  };
+
+  showMapChoice(
+    available: MapNode[],
+    currentWave: number,
+    act: number,
+    graph: MapGraph,
+    regionLookup: (regionId: string) => { name: string; weatherBias: string[]; factionPressure: string[] } | null,
+    factionName: (factionId: string) => string,
+  ): Promise<string> {
+    if (!this.mapPanelEl) {
+      this.mapPanelEl = document.getElementById('map-panel');
+    }
+    if (!this.mapPanelEl) {
+      return Promise.resolve(available[0]?.id ?? '');
+    }
+
+    const actTitle = UI.ACT_TITLES[act - 1] ?? `Act ${act}`;
+
+    const cardsHtml = available.map((node) => {
+      const icon = UI.NODE_ICONS[node.type] ?? '\u2753';
+      const hint = UI.NODE_HINTS[node.type] ?? '';
+      const region = regionLookup(node.regionId);
+      const regionName = region?.name ?? node.regionId;
+      const weather = region?.weatherBias?.[0] ?? '';
+      const weatherIcon = UI.WEATHER_ICONS[weather] ?? '';
+      const factionIds = region?.factionPressure ?? [];
+      const factionLabel = factionIds.map(factionName).filter(Boolean).join(', ');
+      const typeName = node.type.charAt(0).toUpperCase() + node.type.slice(1);
+
+      return `
+        <button type="button" class="map-card" data-node-id="${node.id}">
+          <div class="map-card-icon">${icon}</div>
+          <div class="map-card-type">${typeName}</div>
+          <div class="map-card-region">${weatherIcon} ${regionName}</div>
+          ${factionLabel ? `<div class="map-card-faction">${factionLabel}</div>` : ''}
+          <div class="map-card-hint">${hint}</div>
+        </button>
+      `;
+    }).join('');
+
+    const minimapHtml = this.buildMinimap(graph, available);
+
+    this.mapPanelEl.innerHTML = `
+      <div class="map-act-banner">Act ${act} &mdash; ${actTitle}</div>
+      <div class="map-act-subtitle">Wave ${currentWave} of ${WAVE_TABLE.length} &mdash; Choose yer heading</div>
+      <div class="map-cards">${cardsHtml}</div>
+      <button type="button" class="map-toggle-btn" id="map-toggle-btn">Show Map</button>
+      <div id="run-map">${minimapHtml}</div>
+    `;
+    this.mapPanelEl.style.display = 'flex';
+
+    // Wire toggle
+    const toggleBtn = this.mapPanelEl.querySelector('#map-toggle-btn') as HTMLElement | null;
+    const runMap = this.mapPanelEl.querySelector('#run-map') as HTMLElement | null;
+    if (toggleBtn && runMap) {
+      toggleBtn.addEventListener('click', () => {
+        const isShown = runMap.classList.toggle('show');
+        toggleBtn.textContent = isShown ? 'Hide Map' : 'Show Map';
+      });
+    }
+
+    return new Promise((resolve) => {
+      const buttons = this.mapPanelEl?.querySelectorAll<HTMLElement>('.map-card') ?? [];
+      for (const btn of buttons) {
+        btn.addEventListener('click', () => {
+          const nodeId = btn.dataset.nodeId ?? available[0]?.id ?? '';
+          this.hideMapChoice();
+          resolve(nodeId);
+        }, { once: true });
+      }
+    });
+  }
+
+  hideMapChoice(): void {
+    if (!this.mapPanelEl) {
+      this.mapPanelEl = document.getElementById('map-panel');
+    }
+    if (!this.mapPanelEl) return;
+    this.mapPanelEl.style.display = 'none';
+    this.mapPanelEl.innerHTML = '';
+  }
+
+  private buildMinimap(graph: MapGraph, available: MapNode[]): string {
+    const availableIds = new Set(available.map((n) => n.id));
+    let html = '<div class="minimap-acts">';
+
+    for (let a = 0; a < graph.acts.length; a++) {
+      const act = graph.acts[a];
+      if (a > 0) html += '<div class="minimap-act-divider"></div>';
+
+      html += '<div class="minimap-act">';
+      html += `<div class="minimap-act-label">Act ${act.actNumber}</div>`;
+      html += '<div class="minimap-layers">';
+
+      for (let L = 0; L < act.layers.length; L++) {
+        html += '<div class="minimap-layer">';
+        for (const node of act.layers[L]) {
+          const icon = UI.NODE_ICONS[node.type] ?? '?';
+          let cls = 'minimap-node';
+          if (node.id === graph.currentNodeId) cls += ' current';
+          else if (node.visited) cls += ' visited';
+          else if (availableIds.has(node.id)) cls += ' available';
+          html += `<div class="${cls}" title="${node.label}">${icon}</div>`;
+        }
+        html += '</div>';
+      }
+
+      html += '</div></div>';
+    }
+
+    html += '</div>';
+    return html;
   }
 
   /* ------------------------------------------------------------------ */
@@ -1620,7 +1955,7 @@ export class UI {
     this.codexDiscoveryTimeout = setTimeout(() => {
       toast!.style.opacity = '0';
       toast!.style.transform = 'translate(-50%, -8px)';
-    }, 2400);
+    }, 5000);
   }
 
   hideCodex(): void {
@@ -1654,6 +1989,7 @@ export class UI {
       alliedFactionId?: string | null;
       alliedFactionScore?: number | null;
       doctrineName?: string | null;
+      seed?: number;
     },
   ): void {
     if (!this.runSummaryEl) {
@@ -1720,6 +2056,9 @@ export class UI {
           `${alliedName} (${Math.round(v2Meta.alliedFactionScore ?? 0)})`,
         ]);
       }
+      if (v2Meta?.seed != null) {
+        rows.push(['Seed', v2Meta.seed.toString(16).toUpperCase()]);
+      }
 
       statsEl.innerHTML = rows
         .map(
@@ -1745,6 +2084,12 @@ export class UI {
       }
     }
 
+    // Show/hide endless mode button
+    const endlessBtn = document.getElementById('run-summary-endless');
+    if (endlessBtn) {
+      endlessBtn.style.display = stats.victory ? 'inline-block' : 'none';
+    }
+
     this.runSummaryEl.style.display = 'flex';
   }
 
@@ -1760,6 +2105,16 @@ export class UI {
   /** Wire up the "Play Again" button in the run summary. */
   onRunSummaryRestart(callback: () => void): void {
     const btn = document.getElementById('run-summary-restart');
+    if (btn) {
+      const newBtn = btn.cloneNode(true) as HTMLElement;
+      btn.parentNode?.replaceChild(newBtn, btn);
+      newBtn.addEventListener('click', callback, { once: true });
+    }
+  }
+
+  /** Wire up the "Endless Mode" button in the run summary. */
+  onRunSummaryEndless(callback: () => void): void {
+    const btn = document.getElementById('run-summary-endless');
     if (btn) {
       const newBtn = btn.cloneNode(true) as HTMLElement;
       btn.parentNode?.replaceChild(newBtn, btn);
@@ -1810,7 +2165,7 @@ export class UI {
 
     this.eventWarningTimeout = setTimeout(() => {
       this.hideEventWarning();
-    }, 3000);
+    }, 6000);
   }
 
   hideEventWarning(): void {
@@ -1967,7 +2322,7 @@ export class UI {
         this.captainLogBusy = false;
         this.flushCaptainLogQueue();
       }, 280);
-    }, 2000);
+    }, 5000);
   }
 
   /* ------------------------------------------------------------------ */

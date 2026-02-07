@@ -15,8 +15,8 @@ import { audio } from './Audio';
 import { CombatSystem } from './Combat';
 import { WeatherSystem } from './Weather';
 import type { WeatherState } from './Weather';
-import { ProgressionSystem } from './Progression';
-import type { PlayerStats, Synergy } from './Progression';
+import { ProgressionSystem, saveRunToHistory, loadRunHistory } from './Progression';
+import type { PlayerStats, Synergy, RuntimeSettings } from './Progression';
 import { screenJuice } from './Juice';
 import { SkySystem } from './Sky';
 import { PortScene } from './Port';
@@ -27,28 +27,74 @@ import { CrewSystem } from './Crew';
 import { EventSystem } from './Events';
 import { TutorialSystem } from './Tutorial';
 import type { MerchantV1, WaveConfigV1, EnemyType, RunStats, EventType, IslandType } from './Types';
-import type { ShipClass, ShipClassConfig } from './Types';
+import type { ShipClass, ShipClassConfig, ColorblindMode } from './Types';
 import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS, SHIP_CLASS_CONFIGS } from './Types';
-import { DevPanel } from './DevPanel';
-import { EditorCamera } from './EditorCamera';
-import { ScenarioEditor } from './ScenarioEditor';
-import { EditorUI } from './EditorUI';
 import type { Scenario, ScenarioWave } from './Scenario';
-import { createEmptyScenario, createDefaultWave, scenarioWavesToWaveTable, scenarioFromURLHash } from './Scenario';
 import { V2ContentRegistry } from './V2Content';
 import type { V2Doctrine, V2EventCard } from './V2Content';
 import { NarrativeSystem } from './NarrativeSystem';
 import { MapNodeSystem } from './MapNodeSystem';
-import type { MapNodeType } from './MapNodeSystem';
+import type { MapNodeType, MapNode } from './MapNodeSystem';
 import { FactionSystem } from './FactionSystem';
 import { EconomySystem } from './EconomySystem';
 import { TelemetrySystem } from './TelemetrySystem';
+import {
+  saveRunCheckpoint,
+  loadRunCheckpoint,
+  clearRunCheckpoint,
+  type RunCheckpointV1,
+  type RunCheckpointContractSnapshot,
+} from './RunCheckpoint';
 
 // ===================================================================
 //  Mobile detection
 // ===================================================================
 
 const isMobile = navigator.maxTouchPoints > 0 || 'ontouchstart' in globalThis;
+
+const buildEnv = ((import.meta as unknown as { env?: Record<string, unknown> }).env ?? {}) as Record<string, unknown>;
+
+function envFlag(name: string): boolean {
+  const raw = buildEnv[name];
+  return raw === true || raw === '1' || raw === 'true';
+}
+
+const FORCE_DEV_BUILD = envFlag('VITE_DEV');
+const ENABLE_DEV_PANEL = FORCE_DEV_BUILD || envFlag('DEV') || envFlag('VITE_ENABLE_DEV_PANEL');
+const ENABLE_SCENARIO_EDITOR = FORCE_DEV_BUILD || envFlag('DEV') || envFlag('VITE_ENABLE_SCENARIO_EDITOR');
+const ENABLE_TELEMETRY_EXPORT = FORCE_DEV_BUILD || envFlag('DEV') || envFlag('VITE_ENABLE_TELEMETRY_EXPORT');
+
+type EditorRuntimeModules = {
+  EditorCamera: typeof import('./EditorCamera').EditorCamera;
+  ScenarioEditor: typeof import('./ScenarioEditor').ScenarioEditor;
+  EditorUI: typeof import('./EditorUI').EditorUI;
+  createEmptyScenario: typeof import('./Scenario').createEmptyScenario;
+  createDefaultWave: typeof import('./Scenario').createDefaultWave;
+  scenarioWavesToWaveTable: typeof import('./Scenario').scenarioWavesToWaveTable;
+  scenarioFromURLHash: typeof import('./Scenario').scenarioFromURLHash;
+};
+
+let editorRuntimePromise: Promise<EditorRuntimeModules> | null = null;
+
+function loadEditorRuntime(): Promise<EditorRuntimeModules> {
+  if (!editorRuntimePromise) {
+    editorRuntimePromise = Promise.all([
+      import('./EditorCamera'),
+      import('./ScenarioEditor'),
+      import('./EditorUI'),
+      import('./Scenario'),
+    ]).then(([editorCameraMod, scenarioEditorMod, editorUIMod, scenarioMod]) => ({
+      EditorCamera: editorCameraMod.EditorCamera,
+      ScenarioEditor: scenarioEditorMod.ScenarioEditor,
+      EditorUI: editorUIMod.EditorUI,
+      createEmptyScenario: scenarioMod.createEmptyScenario,
+      createDefaultWave: scenarioMod.createDefaultWave,
+      scenarioWavesToWaveTable: scenarioMod.scenarioWavesToWaveTable,
+      scenarioFromURLHash: scenarioMod.scenarioFromURLHash,
+    }));
+  }
+  return editorRuntimePromise;
+}
 
 // ===================================================================
 //  Renderer & scene
@@ -62,16 +108,51 @@ scene.fog = new THREE.FogExp2(fogColor, fogDensity);
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 500);
 
 const renderer = new THREE.WebGLRenderer({ antialias: !isMobile });
+let currentGraphicsQuality: 'low' | 'medium' | 'high' = 'high';
+
+function getPixelRatioCap(quality: 'low' | 'medium' | 'high'): number {
+  if (isMobile) {
+    if (quality === 'low') return 1.0;
+    if (quality === 'medium') return 1.25;
+    return 1.5;
+  }
+  if (quality === 'low') return 1.0;
+  if (quality === 'medium') return 1.5;
+  return 2.0;
+}
+
+function applyGraphicsQuality(quality: 'low' | 'medium' | 'high'): void {
+  currentGraphicsQuality = quality;
+  renderer.setPixelRatio(Math.min(devicePixelRatio, getPixelRatioCap(quality)));
+}
+
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? 1.5 : 2));
+applyGraphicsQuality(currentGraphicsQuality);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 document.getElementById('game')!.appendChild(renderer.domElement);
+
+function applyAdaptiveUIScale() {
+  const uiRoot = document.getElementById('ui');
+  if (!uiRoot) return;
+  if (isMobile) {
+    uiRoot.style.setProperty('--ui-scale', '1');
+    return;
+  }
+
+  const shortestEdge = Math.min(innerWidth, innerHeight);
+  const scale = THREE.MathUtils.clamp(shortestEdge / 630, 1.37, 2.21);
+  uiRoot.style.setProperty('--ui-scale', scale.toFixed(2));
+}
+
+applyAdaptiveUIScale();
 
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  applyGraphicsQuality(currentGraphicsQuality);
+  applyAdaptiveUIScale();
 });
 
 // ===================================================================
@@ -184,6 +265,73 @@ const mapNodes = new MapNodeSystem(v2Content);
 const factions = new FactionSystem(v2Content);
 const economy = new EconomySystem();
 const telemetry = new TelemetrySystem();
+let accessibilityMotionIntensity = 1;
+
+function motionScale(value: number): number {
+  return Math.max(0, value * accessibilityMotionIntensity);
+}
+
+function applyAccessibilitySettings(settings: RuntimeSettings['accessibility']): void {
+  const root = document.documentElement;
+  root.style.setProperty('--bh-text-scale', settings.textScale.toFixed(2));
+  root.style.setProperty('--bh-flash-intensity', settings.flashIntensity.toFixed(2));
+  document.body.dataset.colorblind = settings.colorblindMode;
+  accessibilityMotionIntensity = settings.motionIntensity;
+  screenJuice.setFlashIntensity(settings.flashIntensity);
+  if (accessibilityMotionIntensity <= 0.001) {
+    screenShake.reset();
+  }
+}
+
+function applyRuntimeSettings(settings: RuntimeSettings): void {
+  audio.setMasterVolume(settings.masterVolume);
+  audio.setMusicVolume(settings.musicVolume);
+  audio.setSfxVolume(settings.sfxVolume);
+  applyGraphicsQuality(settings.graphicsQuality);
+  applyAccessibilitySettings(settings.accessibility);
+}
+
+function updateRuntimeSetting(
+  key: 'master' | 'music' | 'sfx' | 'quality' | 'textScale' | 'motionIntensity' | 'flashIntensity' | 'colorblindMode',
+  value: number | string,
+): void {
+  switch (key) {
+    case 'master':
+      applyRuntimeSettings(progression.updateRuntimeSettings({ masterVolume: Number(value) / 100 }));
+      break;
+    case 'music':
+      applyRuntimeSettings(progression.updateRuntimeSettings({ musicVolume: Number(value) / 100 }));
+      break;
+    case 'sfx':
+      applyRuntimeSettings(progression.updateRuntimeSettings({ sfxVolume: Number(value) / 100 }));
+      break;
+    case 'quality':
+      applyRuntimeSettings(progression.updateRuntimeSettings({
+        graphicsQuality: value === 'low' || value === 'medium' || value === 'high' ? value : 'high',
+      }));
+      break;
+    case 'textScale':
+      applyRuntimeSettings(progression.updateRuntimeSettings({
+        accessibility: { textScale: Number(value) },
+      }));
+      break;
+    case 'motionIntensity':
+      applyRuntimeSettings(progression.updateRuntimeSettings({
+        accessibility: { motionIntensity: Number(value) },
+      }));
+      break;
+    case 'flashIntensity':
+      applyRuntimeSettings(progression.updateRuntimeSettings({
+        accessibility: { flashIntensity: Number(value) },
+      }));
+      break;
+    case 'colorblindMode':
+      applyRuntimeSettings(progression.updateRuntimeSettings({
+        accessibility: { colorblindMode: value as ColorblindMode },
+      }));
+      break;
+  }
+}
 
 // Wire weather system to scene targets
 weather.setTargets({
@@ -217,6 +365,12 @@ const seaSerpentEffect = new SeaSerpentEffect(scene);
 const fireShipExplosion = new FireShipExplosion(scene);
 const treasureSparkle = new TreasureSparkle(scene);
 const victoryConfetti = new VictoryConfetti(scene);
+
+function triggerScreenShake(strength: number): void {
+  screenShake.trigger(motionScale(strength));
+}
+
+applyRuntimeSettings(progression.getRuntimeSettings());
 
 // ===================================================================
 //  Port scene (lazy-created)
@@ -1069,11 +1223,78 @@ function applyMapNodeToWaveConfig(base: WaveConfigV1): WaveConfigV1 {
       break;
     case 'boss':
       if (!config.bossName) {
-        config.bossName = 'Dread Commodore';
-        config.bossHp = Math.max(config.bossHp, Math.round(280 * config.healthMultiplier));
+        // Per-act boss names and HP — WAVE_TABLE already defines bosses for waves 5, 10, 15
+        // but if the table entry lacks one (shouldn't happen), fall back per act
+        const actBossNames = ['Captain Blackbeard', 'Dread Commodore', 'Admiral Drake'];
+        const actBossHp = [300, 550, 800];
+        const bossAct = Math.max(0, Math.min(2, node.act - 1));
+        config.bossName = actBossNames[bossAct];
+        config.bossHp = Math.max(config.bossHp, Math.round(actBossHp[bossAct] * config.healthMultiplier));
       }
-      if (!config.enemyTypes.includes('navy_warship')) config.enemyTypes.push('navy_warship');
+      if (node.act >= 3 && !config.enemyTypes.includes('navy_warship')) {
+        config.enemyTypes.push('navy_warship');
+      }
       break;
+  }
+
+  // Apply region hazards as wave modifiers
+  if (nodeRegion) {
+    for (const hazard of nodeRegion.hazards) {
+      switch (hazard) {
+        case 'fire_reef':
+          // Volcanic reefs: fire ships more common, slightly faster enemies
+          if (!config.enemyTypes.includes('fire_ship') && node.act >= 2) {
+            config.enemyTypes.push('fire_ship');
+          }
+          config.speedMultiplier *= 1.05;
+          break;
+        case 'ash_fog':
+          // Ashfall reduces visibility — force foggy weather
+          config.weather = 'foggy';
+          break;
+        case 'phantom_current':
+          // Ghostly currents: enemies move faster, ghost ships more likely
+          config.speedMultiplier *= 1.08;
+          if (!config.enemyTypes.includes('ghost_ship') && node.act >= 2) {
+            config.enemyTypes.push('ghost_ship');
+          }
+          break;
+        case 'grave_fog':
+          // Thick fog of the dead — always night, reduced ship count but tougher
+          config.weather = 'night';
+          config.healthMultiplier *= 1.1;
+          break;
+        case 'mine_chain':
+          // Imperial minefields: more armed ships
+          config.armedPercent = Math.min(0.95, config.armedPercent + 0.15);
+          break;
+        case 'patrol_net':
+          // Navy patrols: extra escorts, more ships
+          config.totalShips = Math.min(20, config.totalShips + 2);
+          config.armedPercent = Math.min(0.95, config.armedPercent + 0.1);
+          break;
+        case 'serpent_nest':
+          // Serpent-infested waters: tougher enemies, faster
+          config.healthMultiplier *= 1.08;
+          config.speedMultiplier *= 1.06;
+          break;
+        case 'storm_wall':
+          // Perpetual storm barrier
+          config.weather = 'stormy';
+          config.speedMultiplier *= 1.1;
+          break;
+        case 'abyss_vent':
+          // Deep ocean vents: extra ships, night conditions
+          config.totalShips = Math.min(20, config.totalShips + 1);
+          config.weather = 'night';
+          break;
+        case 'mega_swell':
+          // Colossal waves: everything moves faster, more chaotic
+          config.speedMultiplier *= 1.12;
+          config.weather = 'stormy';
+          break;
+      }
+    }
   }
 
   return config;
@@ -1964,6 +2185,21 @@ interface ActiveContractObjective {
   announcedComplete: boolean;
 }
 
+function cloneWaveConfig(config: WaveConfigV1): WaveConfigV1 {
+  return {
+    ...config,
+    enemyTypes: [...config.enemyTypes],
+  };
+}
+
+function toContractSnapshot(objective: ActiveContractObjective): RunCheckpointContractSnapshot {
+  return { ...objective };
+}
+
+function fromContractSnapshot(snapshot: RunCheckpointContractSnapshot): ActiveContractObjective {
+  return { ...snapshot };
+}
+
 function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
   const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
   const props = EnemyAISystem.getSpawnProps(enemyType, isBoss, waveConfig);
@@ -2054,12 +2290,14 @@ let waveCompleteTimer = 0;
 let creakTimer = 0;
 let scoreAtWaveStart = 0;
 let gameOverFired = false;
+let currentRunSeed = 0;
 
 // Tutorial condition tracking
 let tutorialMoved = false;
 let tutorialFired = false;
 let tutorialCaptured = false;
 let tutorialUpgraded = false;
+let tutorialCompletionSaved = false;
 let islandDiscoveryScanTimer = 0;
 const discoveredIslandSeeds = new Set<number>();
 let v2HudRefreshTimer = 0;
@@ -2077,6 +2315,57 @@ let runSetupOpen = false;
 let selectedRunShipClass: ShipClass = 'brigantine';
 let selectedDoctrineId = v2Content.data.doctrines[0]?.id ?? '';
 let beginWaveInProgress = false;
+let pauseMenuOpen = false;
+
+function refreshResumeButton(): void {
+  const resumeBtn = document.getElementById('resume-btn');
+  if (!resumeBtn) return;
+  resumeBtn.style.display = loadRunCheckpoint() ? 'block' : 'none';
+}
+
+function clearRunCheckpointAndRefresh(): void {
+  clearRunCheckpoint();
+  refreshResumeButton();
+}
+
+function buildRunCheckpoint(): RunCheckpointV1 | null {
+  if (!gameStarted || screensaverActive || editorMode || editorPlayTestMode) return null;
+  const waveConfig = activeWaveConfigV1 ? cloneWaveConfig(activeWaveConfigV1) : cloneWaveConfig(progression.getWaveConfigV1());
+  return {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    shipClass: selectedRunShipClass,
+    doctrineId: selectedDoctrineId,
+    seed: currentRunSeed,
+    progression: progression.getRunSnapshot(),
+    map: mapNodes.getSnapshot(),
+    economy: economy.getState(),
+    factionReputation: factions.getReputationSnapshot(),
+    crew: crew.getSnapshot(),
+    activeWaveConfig: waveConfig,
+    activeContractObjective: activeContractObjective ? toContractSnapshot(activeContractObjective) : null,
+    capturesThisWave,
+    armedCapturesThisWave,
+    waveCaptureGold,
+  };
+}
+
+function saveRunCheckpointNow(): void {
+  const checkpoint = buildRunCheckpoint();
+  if (!checkpoint) return;
+  if (saveRunCheckpoint(checkpoint)) {
+    refreshResumeButton();
+  }
+}
+
+function resumeSavedRunIfAvailable(): void {
+  const checkpoint = loadRunCheckpoint();
+  if (!checkpoint) {
+    refreshResumeButton();
+    return;
+  }
+  resumeRunFromCheckpoint(checkpoint);
+}
 
 // Screensaver mode
 let lastIsNight = false;
@@ -2116,40 +2405,70 @@ let devInstakill = false;
 // Scenario editor state
 let editorMode = false;
 let editorPlayTestMode = false;
-let scenarioEditor: ScenarioEditor | null = null;
-let editorUI: EditorUI | null = null;
-let editorCamera: EditorCamera | null = null;
+let scenarioEditor: import('./ScenarioEditor').ScenarioEditor | null = null;
+let editorUI: import('./EditorUI').EditorUI | null = null;
+let editorCamera: import('./EditorCamera').EditorCamera | null = null;
 let playTestScenario: Scenario | null = null;
 
-const devPanel = new DevPanel({
-  onSetGold: (v) => { progression.devSetScore(v); ui.updateScore(v); },
-  onSetHealth: (v) => {
-    progression.devSetHealth(v);
-    const s = progression.getPlayerStats();
-    ui.updateHealth(s.health, s.maxHealth);
-  },
-  onSetMaxSpeed: (v) => progression.devSetMaxSpeed(v),
-  onSetDamage: (v) => { progression.devSetCannonDamage(v); syncUpgradesToCombat(); },
-  onSetWave: (v) => progression.devSetWave(v),
-  onToggleGodMode: (v) => { devGodMode = v; },
-  onToggleInstakill: (v) => { devInstakill = v; },
-  onSpawnEnemy: (type, isBoss) => spawnEnemy(type, isBoss),
-  onSetWeather: (state) => weather.transitionTo(state, 2),
-  onExportTelemetry: () => exportTelemetrySnapshot('dev_panel'),
-  getState: () => ({
-    gold: progression.getScore(),
-    health: progression.getPlayerStats().health,
-    maxHealth: progression.getPlayerStats().maxHealth,
-    maxSpeed: progression.getPlayerStats().maxSpeed,
-    damage: progression.getPlayerStats().cannonDamage,
-    wave: progression.getCurrentWave(),
-    weather: weather.getCurrentState(),
-    godMode: devGodMode,
-    instakill: devInstakill,
-  }),
-});
+type DevPanelInstance = {
+  toggle: () => void;
+};
+
+let devPanel: DevPanelInstance | null = null;
+let devPanelInitPromise: Promise<void> | null = null;
+
+async function ensureDevPanel(): Promise<void> {
+  if (!ENABLE_DEV_PANEL || devPanel) return;
+  if (devPanelInitPromise) return devPanelInitPromise;
+  devPanelInitPromise = import('./DevPanel').then(({ DevPanel }) => {
+    devPanel = new DevPanel({
+      onSetGold: (v) => { progression.devSetScore(v); ui.updateScore(v); },
+      onSetHealth: (v) => {
+        progression.devSetHealth(v);
+        const s = progression.getPlayerStats();
+        ui.updateHealth(s.health, s.maxHealth);
+      },
+      onSetMaxSpeed: (v) => progression.devSetMaxSpeed(v),
+      onSetDamage: (v) => { progression.devSetCannonDamage(v); syncUpgradesToCombat(); },
+      onSetWave: (v) => progression.devSetWave(v),
+      onToggleGodMode: (v) => { devGodMode = v; },
+      onToggleInstakill: (v) => { devInstakill = v; },
+      onSpawnEnemy: (type, isBoss) => spawnEnemy(type, isBoss),
+      onSetWeather: (state) => weather.transitionTo(state, 2),
+      onExportTelemetry: () => exportTelemetrySnapshot('dev_panel'),
+      getState: () => ({
+        gold: progression.getScore(),
+        health: progression.getPlayerStats().health,
+        maxHealth: progression.getPlayerStats().maxHealth,
+        maxSpeed: progression.getPlayerStats().maxSpeed,
+        damage: progression.getPlayerStats().cannonDamage,
+        wave: progression.getCurrentWave(),
+        weather: weather.getCurrentState(),
+        godMode: devGodMode,
+        instakill: devInstakill,
+      }),
+    });
+  }).finally(() => {
+    devPanelInitPromise = null;
+  });
+  return devPanelInitPromise;
+}
+
+function toggleDevPanel(): void {
+  if (!ENABLE_DEV_PANEL) return;
+  void ensureDevPanel().then(() => {
+    devPanel?.toggle();
+  });
+}
+
+if (ENABLE_DEV_PANEL) {
+  void ensureDevPanel();
+}
 
 function exportTelemetrySnapshot(reason: string): string {
+  if (!ENABLE_TELEMETRY_EXPORT) {
+    return 'Telemetry export is disabled in this build.';
+  }
   const doctrine = progression.getActiveDoctrine();
   const snapshot = telemetry.buildExport({
     reason,
@@ -2216,6 +2535,108 @@ function toggleCodex(): void {
   openCodex();
 }
 
+function isSettingsPanelVisible(): boolean {
+  const panel = document.getElementById('settings-panel');
+  return !!panel && panel.style.display !== 'none';
+}
+
+function hidePauseAndSettings(): void {
+  pauseMenuOpen = false;
+  ui.hideSettings();
+  ui.hidePauseMenu();
+}
+
+function quitToTitleFromPause(): void {
+  hidePauseAndSettings();
+  clearRunCheckpointAndRefresh();
+
+  gameStarted = false;
+  gamePaused = false;
+  inPort = false;
+  waveCompleteInProgress = false;
+  waveCompleteTimer = 0;
+  waveAnnouncePending = false;
+  waveAnnounceTimer = 0;
+  beginWaveInProgress = false;
+  activeWaveConfigV1 = null;
+  activeContractObjective = null;
+  capturesThisWave = 0;
+  armedCapturesThisWave = 0;
+  waveCaptureGold = 0;
+
+  for (const m of merchants) {
+    scene.remove(m.mesh);
+  }
+  merchants.length = 0;
+  currentBoss = null;
+
+  if (portScene) {
+    portScene.dispose(scene);
+    portScene = null;
+  }
+  world.dispose();
+  closeCodex();
+  ui.hidePortUI();
+  ui.hidePortCrewHire();
+  ui.hideBossHealthBar();
+  ui.hideMapChoice();
+  ui.hideChoicePrompt();
+  ui.clearCaptainLog();
+  audio.stopPortAmbience();
+  audio.setPortMode(false);
+  audio.setBossMode(false);
+
+  const titleEl = document.getElementById('title');
+  if (titleEl) {
+    titleEl.style.display = '';
+    titleEl.style.opacity = '1';
+    titleEl.style.pointerEvents = '';
+  }
+}
+
+function openSettingsPanelFromPause(): void {
+  const settings = progression.getRuntimeSettings();
+  ui.showSettings(
+    {
+      master: Math.round(settings.masterVolume * 100),
+      music: Math.round(settings.musicVolume * 100),
+      sfx: Math.round(settings.sfxVolume * 100),
+      quality: settings.graphicsQuality,
+      textScale: settings.accessibility.textScale,
+      motionIntensity: settings.accessibility.motionIntensity,
+      flashIntensity: settings.accessibility.flashIntensity,
+      colorblindMode: settings.accessibility.colorblindMode,
+    },
+    (key, value) => {
+      updateRuntimeSetting(
+        key as 'master' | 'music' | 'sfx' | 'quality' | 'textScale' | 'motionIntensity' | 'flashIntensity' | 'colorblindMode',
+        value,
+      );
+    },
+  );
+}
+
+function openPauseMenu(): void {
+  if (!gameStarted || screensaverActive || editorMode || editorPlayTestMode || runSetupOpen || inPort || waveCompleteInProgress) {
+    return;
+  }
+  gamePaused = true;
+  pauseMenuOpen = true;
+  closeCodex();
+  ui.showPauseMenu(
+    () => {
+      hidePauseAndSettings();
+      gamePaused = false;
+    },
+    () => {
+      openSettingsPanelFromPause();
+    },
+    () => {
+      quitToTitleFromPause();
+    },
+  );
+}
+
 function openRunSetup(): void {
   if (gameStarted || screensaverActive || runSetupOpen) return;
   const shipConfigs = getRunSetupShipConfigs();
@@ -2237,12 +2658,12 @@ function openRunSetup(): void {
       shipClass: selectedRunShipClass,
       doctrineId: selectedDoctrineId,
     },
-    (shipClass, doctrineId) => {
+    (shipClass, doctrineId, seed) => {
       runSetupOpen = false;
       selectedRunShipClass = shipClass;
       selectedDoctrineId = doctrineId;
       ui.hideShipSelect();
-      startGame(shipClass, doctrineId);
+      startGame(shipClass, doctrineId, seed);
     },
   );
 }
@@ -2254,13 +2675,14 @@ function openRunSetup(): void {
 const keys: Record<string, boolean> = {};
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === ' ' || e.key.startsWith('Arrow') || 'wasdqemcx'.includes(e.key.toLowerCase())) {
+  const hotkeyChars = ENABLE_TELEMETRY_EXPORT ? 'wasdqemcx' : 'wasdqemc';
+  if (e.key === ' ' || e.key === 'Escape' || e.key.startsWith('Arrow') || hotkeyChars.includes(e.key.toLowerCase())) {
     e.preventDefault();
   }
 
   // Editor mode input handling
   if (editorMode && !editorPlayTestMode) {
-    if (e.key === '`') { devPanel?.toggle(); return; }
+    if (ENABLE_DEV_PANEL && e.key === '`') { toggleDevPanel(); return; }
     if (e.key === 'Escape') { exitEditorMode(); return; }
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); scenarioEditor?.redo(); return; }
     if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); scenarioEditor?.undo(); return; }
@@ -2276,7 +2698,7 @@ window.addEventListener('keydown', (e) => {
   if (editorPlayTestMode) {
     keys[e.key.toLowerCase()] = true;
     if (e.key === 'Escape') { exitPlayTestMode(); return; }
-    if (e.key === '`') { devPanel?.toggle(); return; }
+    if (ENABLE_DEV_PANEL && e.key === '`') { toggleDevPanel(); return; }
     // Fall through to normal game input handling for Q/E/WASD
   }
 
@@ -2287,8 +2709,29 @@ window.addEventListener('keydown', (e) => {
     }
     return;
   }
+
+  if (e.key === 'Escape') {
+    if (codexOpen) {
+      closeCodex();
+      return;
+    }
+    if (isSettingsPanelVisible()) {
+      ui.hideSettings();
+      return;
+    }
+    if (pauseMenuOpen) {
+      hidePauseAndSettings();
+      gamePaused = false;
+      return;
+    }
+    if (gameStarted && !screensaverActive) {
+      openPauseMenu();
+      return;
+    }
+  }
+
   if (!editorPlayTestMode) keys[e.key.toLowerCase()] = true;
-  if (e.key === '`') { devPanel?.toggle(); return; }
+  if (ENABLE_DEV_PANEL && e.key === '`') { toggleDevPanel(); return; }
   if (screensaverActive && e.key !== 'F5' && e.key !== 'F12') { stopScreensaver(); return; }
   if (!gameStarted && !screensaverActive && !editorMode && e.key !== 'F5' && e.key !== 'F12' && e.key.toLowerCase() !== 'c') {
     openRunSetup();
@@ -2306,7 +2749,7 @@ window.addEventListener('keydown', (e) => {
     ui.setMuted(muted);
   }
 
-  if (e.key.toLowerCase() === 'x' && gameStarted && !screensaverActive) {
+  if (ENABLE_TELEMETRY_EXPORT && e.key.toLowerCase() === 'x' && gameStarted && !screensaverActive) {
     const message = exportTelemetrySnapshot('hotkey');
     ui.showCaptainLog(message, 'neutral');
   }
@@ -2341,7 +2784,7 @@ function firePort() {
   muzzleFlash.emit(smokeOrigin, sideDir);
 
   // Screen shake on fire
-  screenShake.trigger(0.15);
+  triggerScreenShake(0.15);
 
   // Ship recoil
   recoilOffset = 0.3;
@@ -2363,7 +2806,7 @@ function fireStarboard() {
   muzzleFlash.emit(smokeOrigin, sideDir);
 
   // Screen shake on fire
-  screenShake.trigger(0.15);
+  triggerScreenShake(0.15);
 
   // Ship recoil
   recoilOffset = 0.3;
@@ -2386,13 +2829,34 @@ const joystickBase = document.getElementById('joystick-base')!;
 const joystickThumb = document.getElementById('joystick-thumb')!;
 
 function handleTouchStart(e: TouchEvent) {
-  e.preventDefault();
-  if (screensaverActive) { stopScreensaver(); return; }
+  if (screensaverActive) {
+    e.preventDefault();
+    stopScreensaver();
+    return;
+  }
   if (runSetupOpen) return;
   if (!gameStarted) {
+    e.preventDefault();
     openRunSetup();
     return;
   }
+
+  // If the game is paused or in a UI state, don't preventDefault
+  // so that 'click' events can be generated for UI interaction.
+  if (gamePaused) return;
+
+  // Also don't preventDefault if we're touching a button or interactive UI element
+  const target = e.target as HTMLElement;
+  if (target && (
+    target.tagName === 'BUTTON' ||
+    target.closest('button') ||
+    target.classList.contains('upgrade-card') ||
+    target.closest('#btn-port, #btn-starboard, #codex-toggle, #tutorial-skip')
+  )) {
+    return;
+  }
+
+  e.preventDefault();
 
   for (let i = 0; i < e.changedTouches.length; i++) {
     const t = e.changedTouches[i];
@@ -2413,6 +2877,18 @@ function handleTouchStart(e: TouchEvent) {
 }
 
 function handleTouchMove(e: TouchEvent) {
+  if (gamePaused || runSetupOpen || !gameStarted) return;
+
+  let tracking = false;
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const id = e.changedTouches[i].identifier;
+    if (id === joystickTouchId || id === spyglassTouchId) {
+      tracking = true;
+      break;
+    }
+  }
+  if (!tracking) return;
+
   e.preventDefault();
   for (let i = 0; i < e.changedTouches.length; i++) {
     const t = e.changedTouches[i];
@@ -2459,11 +2935,27 @@ window.addEventListener('mousedown', (e) => {
     return;
   }
   const target = e.target as HTMLElement;
-  if (target.closest('#screensaver-btn, #editor-btn')) return;
+  if (target.closest('#screensaver-btn, #resume-btn, #editor-btn, #history-btn')) return;
   if (!gameStarted && !runSetupOpen && !editorMode && target.closest('#title')) {
     openRunSetup();
   }
 });
+
+const controlsEl = document.getElementById('controls');
+if (controlsEl) {
+  const controlLines = [
+    'WASD - Sail',
+    'Q / E - Cannons',
+    'SPACE - Spyglass',
+    'ESC - Pause',
+    'C - Codex',
+    'M - Mute',
+  ];
+  if (ENABLE_TELEMETRY_EXPORT) {
+    controlLines.push('X - Export Telemetry');
+  }
+  controlsEl.innerHTML = controlLines.join('<br/>');
+}
 
 // ===================================================================
 //  Mobile UI tweaks
@@ -2529,7 +3021,7 @@ function startScreensaver() {
   playerSpeed = 8;
 
   // Init camera behind player
-  camPos.set(-Math.sin(playerAngle) * 18, 14, -Math.cos(playerAngle) * 18);
+  camPos.set(-Math.sin(playerAngle) * 11, 9, -Math.cos(playerAngle) * 11);
   camPos.add(playerPos);
   camLookAt.copy(playerPos);
 
@@ -2742,6 +3234,20 @@ if (screensaverBtn) {
     startScreensaver();
   });
 }
+const historyBtn = document.getElementById('history-btn');
+if (historyBtn) {
+  historyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    ui.showRunHistory(loadRunHistory());
+  });
+}
+const resumeBtn = document.getElementById('resume-btn');
+if (resumeBtn) {
+  resumeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    resumeSavedRunIfAvailable();
+  });
+}
 const codexToggleBtn = document.getElementById('codex-toggle');
 if (codexToggleBtn) {
   codexToggleBtn.addEventListener('click', (e) => {
@@ -2750,17 +3256,31 @@ if (codexToggleBtn) {
   });
 }
 
-// Wire up editor button
-(window as any).__enterEditor = () => enterEditorMode();
+const editorBtn = document.getElementById('editor-btn');
+if (editorBtn) {
+  if (!ENABLE_SCENARIO_EDITOR) {
+    editorBtn.style.display = 'none';
+  } else {
+    editorBtn.style.display = '';
+    editorBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void enterEditorMode();
+    });
+  }
+}
+refreshResumeButton();
 
 // ===================================================================
 //  Scenario Editor Functions
 // ===================================================================
 
-function enterEditorMode(scenario?: Scenario): void {
+async function enterEditorMode(scenario?: Scenario): Promise<void> {
+  if (!ENABLE_SCENARIO_EDITOR) return;
   if (editorMode) return;
   if (screensaverActive) stopScreensaver();
   if (gameStarted) return; // don't enter from mid-game
+
+  const runtime = await loadEditorRuntime();
 
   // Close run setup if it raced open from the window mousedown
   if (runSetupOpen) {
@@ -2776,13 +3296,13 @@ function enterEditorMode(scenario?: Scenario): void {
   if (titleEl) titleEl.style.display = 'none';
   ui.hideAll();
 
-  const sc = scenario ?? createEmptyScenario();
+  const sc = scenario ?? runtime.createEmptyScenario();
 
   // Lazy init editor systems
-  if (!editorCamera) editorCamera = new EditorCamera();
-  if (!scenarioEditor) scenarioEditor = new ScenarioEditor();
+  if (!editorCamera) editorCamera = new runtime.EditorCamera();
+  if (!scenarioEditor) scenarioEditor = new runtime.ScenarioEditor();
   if (!editorUI) {
-    editorUI = new EditorUI({
+    editorUI = new runtime.EditorUI({
       onToolChange: (tool) => scenarioEditor?.setTool(tool),
       onIslandTypeSelect: (type) => scenarioEditor?.setPlaceType(type),
       onIslandPropertyChange: (index, key, value) => {
@@ -2790,7 +3310,7 @@ function enterEditorMode(scenario?: Scenario): void {
       },
       onWaveAdd: () => {
         const s = editorUI?.getScenario();
-        if (s) { s.waves.push(createDefaultWave()); editorUI?.refresh(); }
+        if (s) { s.waves.push(runtime.createDefaultWave()); editorUI?.refresh(); }
       },
       onWaveEdit: (index, wave) => {
         const s = editorUI?.getScenario();
@@ -2815,9 +3335,9 @@ function enterEditorMode(scenario?: Scenario): void {
       onSave: () => {},
       onLoad: (loadedScenario) => {
         exitEditorMode();
-        enterEditorMode(loadedScenario);
+        void enterEditorMode(loadedScenario);
       },
-      onPlayTest: () => enterPlayTestMode(),
+      onPlayTest: () => { void enterPlayTestMode(); },
       onExitEditor: () => exitEditorMode(),
       onUndo: () => scenarioEditor?.undo(),
       onRedo: () => scenarioEditor?.redo(),
@@ -2865,8 +3385,10 @@ function exitEditorMode(): void {
   }
 }
 
-function enterPlayTestMode(): void {
+async function enterPlayTestMode(): Promise<void> {
   if (!editorMode || !editorUI || !scenarioEditor) return;
+  const runtime = await loadEditorRuntime();
+  clearRunCheckpointAndRefresh();
 
   const sc = editorUI.getScenario();
   if (!sc || sc.waves.length === 0) return;
@@ -2906,7 +3428,7 @@ function enterPlayTestMode(): void {
   ocean.setReefPositions(world.getReefData());
 
   // Set custom wave table
-  const waveTable = scenarioWavesToWaveTable(sc.waves);
+  const waveTable = runtime.scenarioWavesToWaveTable(sc.waves);
   progression.reset();
   progression.initializeStats('brigantine');
   progression.setCustomWaveTable(waveTable);
@@ -2982,17 +3504,164 @@ function exitPlayTestMode(): void {
 
   // Re-enter editor with the same scenario
   editorMode = false; // reset so enterEditorMode works
-  enterEditorMode(playTestScenario);
+  void enterEditorMode(playTestScenario);
   playTestScenario = null;
 }
 
-function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: string = selectedDoctrineId) {
+function resetTutorialStateForRun(): void {
+  tutorial.reset();
+  tutorialMoved = false;
+  tutorialFired = false;
+  tutorialCaptured = false;
+  tutorialUpgraded = false;
+  tutorialCompletionSaved = progression.isTutorialCompleted();
+  if (!tutorialCompletionSaved) {
+    tutorial.start();
+  }
+}
+
+function resetTutorialForResume(): void {
+  tutorial.reset();
+  tutorialMoved = false;
+  tutorialFired = false;
+  tutorialCaptured = false;
+  tutorialUpgraded = false;
+  tutorialCompletionSaved = true;
+}
+
+function showGameplayHudImmediate(): void {
+  const titleEl = document.getElementById('title');
+  if (titleEl) {
+    titleEl.style.display = 'none';
+    titleEl.style.opacity = '0';
+    titleEl.style.pointerEvents = 'none';
+  }
+  const healthBar = document.getElementById('health-bar');
+  if (healthBar) healthBar.style.opacity = '1';
+  const waveCounter = document.getElementById('wave-counter');
+  if (waveCounter) waveCounter.style.opacity = '1';
+  const cdPort = document.getElementById('cooldown-port');
+  if (cdPort) cdPort.style.opacity = '1';
+  const cdStarboard = document.getElementById('cooldown-starboard');
+  if (cdStarboard) cdStarboard.style.opacity = '1';
+  const minimap = document.getElementById('minimap-container');
+  if (minimap) minimap.classList.add('show');
+}
+
+function resumeRunFromCheckpoint(checkpoint: RunCheckpointV1): void {
+  runSetupOpen = false;
+  pauseMenuOpen = false;
+  ui.hidePauseMenu();
+  ui.hideSettings();
+  ui.hideShipSelect();
+  ui.hideChoicePrompt();
+  ui.hideMapChoice();
+  ui.hideRunSummary();
+  closeCodex();
+
+  if (screensaverActive) stopScreensaver();
+  if (editorMode) exitEditorMode();
+
+  gameStarted = true;
+  gamePaused = false;
+  gameOverFired = false;
+  waveCompleteInProgress = false;
+  waveCompleteTimer = 0;
+  waveAnnouncePending = false;
+  waveAnnounceTimer = 0;
+  beginWaveInProgress = false;
+
+  pendingFactionReputation.clear();
+  factionFeedbackTimer = 0;
+  capturesThisWave = Math.max(0, checkpoint.capturesThisWave);
+  armedCapturesThisWave = Math.max(0, checkpoint.armedCapturesThisWave);
+  waveCaptureGold = Math.max(0, checkpoint.waveCaptureGold);
+  activeContractObjective = checkpoint.activeContractObjective
+    ? fromContractSnapshot(checkpoint.activeContractObjective)
+    : null;
+
+  for (const m of merchants) {
+    scene.remove(m.mesh);
+  }
+  merchants.length = 0;
+  nextMerchantId = 0;
+  currentBoss = null;
+  audio.setBossMode(false);
+
+  if (portScene) {
+    portScene.dispose(scene);
+    portScene = null;
+  }
+  inPort = false;
+  ui.hidePortUI();
+  ui.hidePortCrewHire();
+  audio.stopPortAmbience();
+  audio.setPortMode(false);
+
+  selectedRunShipClass = checkpoint.shipClass;
+  selectedDoctrineId = checkpoint.doctrineId;
+  currentRunSeed = checkpoint.seed;
+
+  progression.reset();
+  const doctrine = getDoctrineById(checkpoint.doctrineId);
+  progression.initializeStats(checkpoint.shipClass, doctrine);
+  progression.restoreRunSnapshot(checkpoint.progression);
+  mapNodes.restoreSnapshot(checkpoint.map);
+  factions.applyReputationSnapshot(checkpoint.factionReputation);
+  economy.applyState(checkpoint.economy);
+  crew.restoreSnapshot(checkpoint.crew ?? []);
+
+  world.dispose();
+  world.generateIslands();
+  ocean.setReefPositions(world.getReefData());
+  activeWaveConfigV1 = checkpoint.activeWaveConfig ? cloneWaveConfig(checkpoint.activeWaveConfig) : progression.getWaveConfigV1();
+
+  playerPos.set(0, 0, 0);
+  playerAngle = 0;
+  playerSpeed = 0;
+  playerVel.set(0, 0, 0);
+  combo = 0;
+  lastCaptureTime = -Infinity;
+
+  syncUpgradesToCombat();
+  const stats = progression.getPlayerStats();
+  ui.updateHealth(stats.health, stats.maxHealth);
+  ui.updateScore(progression.getScore());
+  ui.updateWaveCounter(
+    progression.getCurrentWave(),
+    progression.getShipsRemaining(),
+    progression.getShipsTotal(),
+  );
+  ui.updateCrewHUD(crew.getCrew().map(member => ({
+    role: member.role,
+    level: member.level,
+    icon: CREW_ROLE_CONFIGS[member.role].icon,
+  })));
+
+  discoveredIslandSeeds.clear();
+  islandDiscoveryScanTimer = 0;
+  v2HudRefreshTimer = 0;
+  narrative.reset();
+  ui.clearCaptainLog();
+  ui.showCaptainLog('Run resumed from checkpoint.', 'neutral');
+
+  resetTutorialForResume();
+  showGameplayHudImmediate();
+  weather.transitionTo(activeWaveConfigV1.weather, 1);
+  audio.init();
+  audio.setWeatherIntensity(weather.getCurrentConfig().windIntensity);
+  spawnWaveFleet();
+  saveRunCheckpointNow();
+}
+
+function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: string = selectedDoctrineId, customSeed?: number) {
   const availableShips = getRunSetupShipConfigs();
   const fallbackShip = availableShips.find((cfg) => !cfg.locked)?.id ?? 'brigantine';
   if (!availableShips.some((cfg) => cfg.id === shipClass && !cfg.locked)) {
     shipClass = fallbackShip;
   }
   runSetupOpen = false;
+  clearRunCheckpointAndRefresh();
   ui.hideShipSelect();
   ui.hideChoicePrompt();
   closeCodex();
@@ -3028,13 +3697,13 @@ function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: stri
   world.generateIslands();
   const reefData = world.getReefData();
   ocean.setReefPositions(reefData);
-  const runSeed = Math.floor(Math.random() * 0x7fffffff);
-  mapNodes.startRun(runSeed);
+  currentRunSeed = customSeed ?? Math.floor(Math.random() * 0x7fffffff);
+  mapNodes.startRun(currentRunSeed);
   factions.reset();
   economy.resetRun();
   telemetry.resetRun();
   telemetry.track('run_start', {
-    seed: runSeed,
+    seed: currentRunSeed,
     shipClass,
     doctrine: doctrine?.id ?? 'none',
   });
@@ -3064,8 +3733,7 @@ function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: stri
   const currentNode = mapNodes.getCurrentNode();
   if (currentNode) narrative.onNodeStart(currentNode.label);
 
-  // Start tutorial for new players
-  tutorial.start();
+  resetTutorialStateForRun();
 
   setTimeout(() => {
     ui.hideTitle();
@@ -3128,12 +3796,23 @@ async function beginWave() {
       if (!config.enemyTypes.includes('merchant_galleon')) config.enemyTypes.push('merchant_galleon');
     }
 
-    // Wave preview
+    // Reputation tokens reduce hostility — spend 2 to lower armed% by 10%
+    const econState = economy.getState();
+    if (econState.reputationTokens >= 2 && config.armedPercent > 0) {
+      economy.addReputationTokens(-2);
+      config.armedPercent = Math.max(0, config.armedPercent - 0.10);
+      ui.showCaptainLog('Our reputation precedes us — fewer escorts on the horizon.', 'reward');
+    }
+
+    // Wave preview — Intel >= 3 reveals enemy types
+    const intelLevel = economy.getState().intel;
     ui.showWavePreview(
       config.wave,
       config.weather,
       config.totalShips,
       config.armedPercent,
+      nodeRegion?.hazards,
+      intelLevel >= 3 ? config.enemyTypes : undefined,
     );
 
     // Wave announcement
@@ -3173,6 +3852,8 @@ async function beginWave() {
       events.startEvent(config.specialEvent, playerPos, world.getIslands().length);
       announceEventStart(config.specialEvent);
     }
+
+    saveRunCheckpointNow();
   } finally {
     beginWaveInProgress = false;
     ui.hideChoicePrompt();
@@ -3243,16 +3924,22 @@ async function onWaveComplete() {
 
   await new Promise(resolve => setTimeout(resolve, 1000));
 
-  // Show upgrade selection
+  // Show upgrade selection (skip if pool exhausted)
   const choices = progression.getUpgradeChoices();
-  const choiceIndex = await ui.showUpgradeScreen(
-    choices.map(c => ({
-      ...c,
-      tier: c.tier,
-    })),
-    progression.getAcquiredUpgrades(),
-  );
-  const synergy = progression.selectUpgrade(choiceIndex);
+  let synergy: Synergy | null = null;
+  if (choices.length > 0) {
+    const choiceIndex = await ui.showUpgradeScreen(
+      choices.map(c => ({
+        ...c,
+        tier: c.tier,
+      })),
+      progression.getAcquiredUpgrades(),
+    );
+    synergy = progression.selectUpgrade(choiceIndex);
+  } else {
+    // No upgrades left — still advance the wave counter
+    progression.skipUpgrade();
+  }
   tutorialUpgraded = true;
 
   // Show synergy popup if triggered
@@ -3277,8 +3964,6 @@ async function onWaveComplete() {
   // Add meta gold (only wave earnings, not cumulative total)
   progression.addMetaGold(progression.getScore() - scoreAtWaveStart);
   economy.addReputationTokens(1);
-
-  gamePaused = false;
 
   // Victory check — after final wave, show run summary
   if (progression.checkVictory() && editorPlayTestMode) {
@@ -3308,6 +3993,20 @@ async function onWaveComplete() {
     const doctrine = progression.getActiveDoctrine();
     progression.saveHighScore();
     progression.saveMetaStats();
+    clearRunCheckpointAndRefresh();
+    saveRunToHistory({
+      date: new Date().toISOString(),
+      shipClass: runStats.shipClass,
+      doctrine: doctrine?.name ?? 'None',
+      seed: currentRunSeed,
+      victory: true,
+      wavesCompleted: runStats.wavesCompleted,
+      gold: runStats.gold,
+      shipsDestroyed: runStats.shipsDestroyed,
+      maxCombo: runStats.maxCombo,
+      damageDealt: runStats.damageDealt,
+      timePlayed: runStats.timePlayed,
+    });
     ui.showRunSummary(runStats, unlocks, {
       codexCount: progression.getCodexEntryCount(),
       doctrineName: doctrine?.name ?? null,
@@ -3315,17 +4014,61 @@ async function onWaveComplete() {
       hostileFactionScore: hostile?.score ?? null,
       alliedFactionId: allied?.id ?? null,
       alliedFactionScore: allied?.score ?? null,
+      seed: currentRunSeed,
     });
     ui.onRunSummaryRestart(() => {
       ui.hideRunSummary();
       restartGame();
+    });
+    ui.onRunSummaryEndless(() => {
+      ui.hideRunSummary();
+      victoryConfetti.stop();
+      progression.setEndlessMode(true);
+      gamePaused = false;
+      waveCompleteInProgress = false;
+      beginWave();
     });
     return;
   }
 
   // Port visit on port waves
   const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
-  const nextNode = mapNodes.advanceNode();
+
+  // Editor play-test: skip map choice, advance linearly
+  if (editorPlayTestMode) {
+    mapNodes.advanceNode();
+    waveCompleteInProgress = false;
+    beginPlayTestWave();
+    return;
+  }
+
+  // Map choice: let player pick next node if branching is available
+  const available = mapNodes.getAvailableNextNodes();
+  let nextNode: MapNode | null = null;
+
+  if (available.length > 1) {
+    const currentNode = mapNodes.getCurrentNode();
+    const act = currentNode?.act ?? 1;
+    const graph = mapNodes.getGraph();
+    const chosenId = await ui.showMapChoice(
+      available,
+      progression.getCurrentWave(),
+      act,
+      graph,
+      (regionId) => {
+        const r = v2Content.getRegion(regionId);
+        return r ? { name: r.name, weatherBias: r.weatherBias, factionPressure: r.factionPressure } : null;
+      },
+      (factionId) => v2Content.getFaction(factionId)?.name ?? factionId,
+    );
+    nextNode = mapNodes.selectNode(chosenId);
+  } else if (available.length === 1) {
+    nextNode = mapNodes.selectNode(available[0].id);
+  } else {
+    // Endless mode — no map nodes left
+    nextNode = null;
+  }
+
   if (nextNode) {
     telemetry.track('map_node_advance', {
       nextNodeId: nextNode.id,
@@ -3346,12 +4089,9 @@ async function onWaveComplete() {
       EnemyAISystem.resetPressureProfile();
     }
   }
+
   waveCompleteInProgress = false;
-  if (editorPlayTestMode) {
-    // Play-test: skip port visits, go straight to next wave
-    beginPlayTestWave();
-    return;
-  }
+  gamePaused = false;
   const shouldPort = waveConfig.isPortWave || nextNode?.type === 'port';
   if (shouldPort) {
     enterPort();
@@ -3412,7 +4152,14 @@ function enterPort() {
     const tierFactor = u.tier === 'legendary' ? tierMult.legendary : u.tier === 'rare' ? tierMult.rare : tierMult.common;
     costMap[u.id] = Math.max(75, Math.round(baseCost * marketProfile.shopMultiplier * tierFactor));
   }
-  const repairCostPer10 = Math.max(35, Math.round(100 * marketProfile.repairMultiplier));
+  // Supplies reduce repair costs (2% per supply, max 40% discount)
+  const currentSupplies = economy.getState().supplies;
+  const supplyDiscountPct = Math.min(40, currentSupplies * 2);
+  const supplyDiscount = 1 - supplyDiscountPct / 100;
+  const repairCostPer10 = Math.max(20, Math.round(100 * marketProfile.repairMultiplier * supplyDiscount));
+  if (supplyDiscountPct > 0) {
+    marketProfile.marketNotes.push(`Supplies stockpile: ${supplyDiscountPct}% repair discount.`);
+  }
   const getCrewHireCost = (role: keyof typeof CREW_ROLE_CONFIGS): number => {
     return Math.max(90, Math.round(CREW_ROLE_CONFIGS[role].cost * marketProfile.crewMultiplier));
   };
@@ -3456,6 +4203,7 @@ function enterPort() {
         ui.updatePortHealth(newStats.health, newStats.maxHealth);
         rebuildPlayerShip();
         syncUpgradesToCombat();
+        saveRunCheckpointNow();
       }
     },
     (amount: number) => {
@@ -3471,6 +4219,7 @@ function enterPort() {
           ui.updatePortGold(progression.getScore());
           const newStats = progression.getPlayerStats();
           ui.updatePortHealth(newStats.health, newStats.maxHealth);
+          saveRunCheckpointNow();
         }
       } else {
         const chunkCost = Math.ceil(amount / 10) * repairCostPer10;
@@ -3480,6 +4229,7 @@ function enterPort() {
           ui.updatePortGold(progression.getScore());
           const newStats = progression.getPlayerStats();
           ui.updatePortHealth(newStats.health, newStats.maxHealth);
+          saveRunCheckpointNow();
         }
       }
     },
@@ -3521,6 +4271,7 @@ function enterPort() {
         progression.getScore(),
         handleCrewHire,
       );
+      saveRunCheckpointNow();
     } else if (check.reason) {
       ui.showCaptainLog(check.reason, 'warning');
     }
@@ -3530,6 +4281,7 @@ function enterPort() {
     gold,
     handleCrewHire,
   );
+  saveRunCheckpointNow();
 }
 
 function leavePort() {
@@ -3571,22 +4323,40 @@ async function onGameOver() {
   progression.saveHighScore();
   progression.setFactionReputationSnapshot(factions.getReputationSnapshot());
   progression.saveMetaStats();
+  clearRunCheckpointAndRefresh();
   ui.hideBossHealthBar();
 
+  const runStats = progression.getRunStats();
+  const doctrine = getDoctrineById(selectedDoctrineId);
+  saveRunToHistory({
+    date: new Date().toISOString(),
+    shipClass: runStats.shipClass,
+    doctrine: doctrine?.name ?? 'None',
+    seed: currentRunSeed,
+    victory: false,
+    wavesCompleted: runStats.wavesCompleted,
+    gold: runStats.gold,
+    shipsDestroyed: runStats.shipsDestroyed,
+    maxCombo: runStats.maxCombo,
+    damageDealt: runStats.damageDealt,
+    timePlayed: runStats.timePlayed,
+  });
   await ui.showGameOver(
-    progression.getScore(),
-    progression.getCurrentWave(),
+    runStats,
     progression.getHighScore(),
     progression.getHighWave(),
+    currentRunSeed,
   );
 
   restartGame();
 }
 
 function restartGame() {
+  clearRunCheckpointAndRefresh();
   runSetupOpen = false;
   ui.hideShipSelect();
   ui.hideChoicePrompt();
+  ui.hideMapChoice();
   closeCodex();
   v2EventCardCooldowns.clear();
   pendingFollowupChoices.clear();
@@ -3624,8 +4394,8 @@ function restartGame() {
   }
   progression.initializeStats(selectedRunShipClass, doctrine);
   syncUpgradesToCombat();
-  const runSeed = Math.floor(Math.random() * 0x7fffffff);
-  mapNodes.startRun(runSeed);
+  currentRunSeed = Math.floor(Math.random() * 0x7fffffff);
+  mapNodes.startRun(currentRunSeed);
   factions.reset();
   economy.resetRun();
   telemetry.resetRun();
@@ -3648,12 +4418,7 @@ function restartGame() {
   ocean.setReefPositions(world.getReefData());
   crew.reset();
   events.reset();
-  tutorial.reset();
-  tutorial.start();
-  tutorialMoved = false;
-  tutorialFired = false;
-  tutorialCaptured = false;
-  tutorialUpgraded = false;
+  resetTutorialStateForRun();
   islandDiscoveryScanTimer = 0;
   discoveredIslandSeeds.clear();
   v2HudRefreshTimer = 0;
@@ -3713,7 +4478,7 @@ function restartGame() {
 //  Camera
 // ===================================================================
 
-const camPos = new THREE.Vector3(0, 20, 30);
+const camPos = new THREE.Vector3(0, 13, 20);
 const camLookAt = new THREE.Vector3();
 let spyglassAmount = 0;
 
@@ -3726,8 +4491,8 @@ function updateCamera(dt: number) {
     spyglassAmount, spyglass ? 1 : 0, 1 - Math.exp(-5 * dt),
   );
 
-  const distBehind = THREE.MathUtils.lerp(18, 26, speedRatio);
-  const camHeight = THREE.MathUtils.lerp(14, 19, speedRatio);
+  const distBehind = THREE.MathUtils.lerp(11, 17, speedRatio);
+  const camHeight = THREE.MathUtils.lerp(9, 13, speedRatio);
   const spyFwd = spyglassAmount * 14;
   const spyUp = spyglassAmount * 4;
 
@@ -3750,7 +4515,7 @@ function updateCamera(dt: number) {
   camLookAt.lerp(_camTmpA, 1 - Math.exp(-5 * dt));
   camera.lookAt(camLookAt);
 
-  const baseFov = THREE.MathUtils.lerp(56, 68, speedRatio);
+  const baseFov = THREE.MathUtils.lerp(46, 56, speedRatio);
   const targetFov = THREE.MathUtils.lerp(baseFov, 22, spyglassAmount);
   camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-6 * dt));
   camera.updateProjectionMatrix();
@@ -3996,7 +4761,7 @@ function updateMerchants(dt: number) {
       if (explResult && explResult.exploded) {
         fireShipExplosion.emit(m.pos, explResult.aoeRadius);
         explosionEffect.emit(m.pos, 40);
-        screenShake.trigger(0.8);
+        triggerScreenShake(0.8);
         audio.playExplosion(m.pos, playerPos);
 
         // Damage player if in range (skip in screensaver or god mode — invincible)
@@ -4139,7 +4904,7 @@ function triggerCapture(m: MerchantV1, _index: number) {
   if (screensaverActive) {
     goldBurst.emit(m.pos, 20);
     waterSplash.emit(m.pos, 20);
-    screenShake.trigger(0.3);
+    triggerScreenShake(0.3);
     audio.playSplash();
     floatingDebris.emit(m.pos);
     m.state = 'sinking';
@@ -4193,7 +4958,7 @@ function triggerCapture(m: MerchantV1, _index: number) {
   ui.showCapture(`+${reward} Gold!`, combo);
   goldBurst.emit(m.pos, 30 + combo * 8);
   waterSplash.emit(m.pos, 20);
-  screenShake.trigger(0.4 + combo * 0.12);
+  triggerScreenShake(0.4 + combo * 0.12);
   juiceScale = 1.18;
   juiceVel = -4;
 
@@ -4302,7 +5067,7 @@ function updateCombat(dt: number) {
       const destroyed = events.hitTentacle(tentIndex, hit.damage);
       explosionEffect.emit(hit.hitPos, 25);
       audio.playExplosion(hit.hitPos, playerPos);
-      screenShake.trigger(0.3);
+      triggerScreenShake(0.3);
       if (destroyed) {
         goldBurst.emit(hit.hitPos, 15);
       }
@@ -4324,7 +5089,7 @@ function updateCombat(dt: number) {
     // Effects at hit point
     explosionEffect.emit(hit.hitPos, 20);
     audio.playExplosion(hit.hitPos, playerPos);
-    screenShake.trigger(0.25);
+    triggerScreenShake(0.25);
 
     if (m.hp <= 0) {
       const idx = merchants.indexOf(m);
@@ -4340,11 +5105,11 @@ function updateCombat(dt: number) {
     // In screensaver, player is invincible — just show effects
     if (screensaverActive) {
       explosionEffect.emit(playerHit.hitPos, 15);
-      screenShake.trigger(0.3);
+      triggerScreenShake(0.3);
     } else {
       explosionEffect.emit(playerHit.hitPos, 15);
       audio.playExplosion(playerHit.hitPos, playerPos);
-      screenShake.trigger(0.6);
+      triggerScreenShake(0.6);
 
       if (!devGodMode) {
         const stats = progression.getPlayerStats();
@@ -4391,7 +5156,7 @@ function updateWeather(dt: number) {
 
   // Lightning
   if (result.lightning) {
-    screenShake.trigger(0.3);
+    triggerScreenShake(0.3);
     skySystem.triggerLightning(playerPos);
     audio.playLightningCrack();
     if (result.thunderDelay > 0) {
@@ -4579,7 +5344,7 @@ function updateEvents(dt: number) {
     const dead = progression.takeDamage(result.damageToPlayer);
     const stats = progression.getPlayerStats();
     ui.updateHealth(stats.health, stats.maxHealth);
-    screenShake.trigger(0.3);
+    triggerScreenShake(0.3);
     if (dead && !gameOverFired) {
       gameOverFired = true;
       onGameOver();
@@ -4658,7 +5423,13 @@ function updateEvents(dt: number) {
 // ===================================================================
 
 function updateTutorial(dt: number) {
-  if (!tutorial.isActive()) return;
+  if (!tutorial.isActive()) {
+    if (!tutorialCompletionSaved && tutorial.hasEnded()) {
+      progression.markTutorialCompleted();
+      tutorialCompletionSaved = true;
+    }
+    return;
+  }
 
   // Track movement condition
   if (Math.abs(playerSpeed) > 1) tutorialMoved = true;
@@ -4670,6 +5441,11 @@ function updateTutorial(dt: number) {
     upgraded: tutorialUpgraded,
   });
   tutorial.update(dt);
+
+  if (!tutorialCompletionSaved && tutorial.hasEnded()) {
+    progression.markTutorialCompleted();
+    tutorialCompletionSaved = true;
+  }
 }
 
 function updateV2Hud(dt: number) {
@@ -4726,7 +5502,12 @@ function animate(now: number) {
   // Get time scale from slow-motion juice
   const stats = progression.getPlayerStats();
   const healthPct = stats.health / stats.maxHealth * 100;
-  const timeScale = screenJuice.update(rawDt, healthPct);
+  const rawJuiceTimeScale = screenJuice.update(rawDt, healthPct);
+  const timeScale = THREE.MathUtils.clamp(
+    1 - (1 - rawJuiceTimeScale) * accessibilityMotionIntensity,
+    0.05,
+    1,
+  );
 
   const dt = rawDt * timeScale;
   time += dt;
@@ -4857,7 +5638,7 @@ function animate(now: number) {
 
   // Speed lines
   if (gameStarted && !gamePaused) {
-    speedLines.update(dt, playerPos, playerAngle, Math.abs(playerSpeed));
+    speedLines.update(dt, playerPos, playerAngle, Math.abs(playerSpeed) * accessibilityMotionIntensity);
   }
 
   // Floating debris
@@ -4876,8 +5657,10 @@ function animate(now: number) {
 requestAnimationFrame(animate);
 
 // URL hash check: load shared scenario on startup
-if (location.hash.startsWith('#scenario=')) {
-  scenarioFromURLHash(location.hash).then(s => {
-    if (s) enterEditorMode(s);
+if (ENABLE_SCENARIO_EDITOR && location.hash.startsWith('#scenario=')) {
+  void loadEditorRuntime().then((runtime) => runtime.scenarioFromURLHash(location.hash)).then((s) => {
+    if (s) {
+      void enterEditorMode(s);
+    }
   });
 }

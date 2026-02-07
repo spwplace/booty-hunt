@@ -176,6 +176,11 @@ export class ScreenShake {
       this.intensity = 0;
     }
   }
+
+  reset(): void {
+    this.intensity = 0;
+    this.offset.set(0, 0, 0);
+  }
 }
 
 // ---------------------------------------------------------------------------

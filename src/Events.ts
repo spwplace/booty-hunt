@@ -22,7 +22,7 @@ const EVENT_COOLDOWN = 30; // seconds between events
 const TREASURE_MAP_CHANCE = 0.10; // per kill
 
 // Kraken
-const KRAKEN_MIN_WAVE = 5;
+const KRAKEN_MIN_WAVE = 10;
 const KRAKEN_CHANCE = 0.15;
 const KRAKEN_DURATION = 10;
 const KRAKEN_TENTACLE_COUNT = 4;
@@ -33,7 +33,7 @@ const KRAKEN_GOLD_REWARD = 500;
 const KRAKEN_TENTACLE_RADIUS = 12;
 
 // Whirlpool
-const WHIRLPOOL_MIN_WAVE = 3;
+const WHIRLPOOL_MIN_WAVE = 6;
 const WHIRLPOOL_CHANCE = 0.20;
 const WHIRLPOOL_DURATION = 15;
 const WHIRLPOOL_PULL_RADIUS = 25;
@@ -45,12 +45,12 @@ const WHIRLPOOL_CENTER_DAMAGE = 20;
 const WHIRLPOOL_PUSH_DISTANCE = 10;
 
 // Ghost ship event
-const GHOST_SHIP_MIN_WAVE = 4;
+const GHOST_SHIP_MIN_WAVE = 6;
 const GHOST_SHIP_CHANCE = 0.10;
 const GHOST_SHIP_DURATION = 15;
 
 // Sea serpent
-const SERPENT_MIN_WAVE = 7;
+const SERPENT_MIN_WAVE = 8;
 const SERPENT_CHANCE = 0.10;
 const SERPENT_DURATION = 20;
 const SERPENT_SEGMENT_COUNT = 8;

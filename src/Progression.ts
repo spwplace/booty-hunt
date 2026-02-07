@@ -1,8 +1,11 @@
 import type { WeatherState } from './Weather';
 import type {
+  AccessibilitySettings,
+  ColorblindMode,
   ShipClass,
   CrewBonus,
   RunStats,
+  RunHistoryEntry,
   WaveConfigV1,
   SaveDataV1,
 } from './Types';
@@ -79,6 +82,30 @@ export interface PlayerStats {
   cannonsPerSide?: number;
   /** Dodge bonus from ship class */
   shipDodgeBonus?: number;
+}
+
+export interface ProgressionRunSnapshot {
+  wave: number;
+  state: GameState;
+  score: number;
+  shipsDestroyed: number;
+  shipsTotal: number;
+  stats: PlayerStats;
+  acquiredUpgradeIds: string[];
+  activeSynergies: string[];
+  runStats: RunStats;
+  runTimeSeconds: number;
+  shipClass: ShipClass;
+  upgradeBonus: number;
+  endlessMode: boolean;
+}
+
+export interface RuntimeSettings {
+  masterVolume: number;
+  musicVolume: number;
+  sfxVolume: number;
+  graphicsQuality: 'low' | 'medium' | 'high';
+  accessibility: AccessibilitySettings;
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +490,16 @@ const META_UNLOCKS: MetaUnlock[] = [
   { id: 'golden_hull', cost: 15000, description: 'Cosmetic golden hull' },
 ];
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(0, Math.min(1, value));
+}
+
+function parseColorblindMode(value: unknown): ColorblindMode {
+  if (value === 'protanopia' || value === 'deuteranopia' || value === 'tritanopia') return value;
+  return 'off';
+}
+
 function createDefaultSaveV1(): SaveDataV1 {
   return {
     highScore: 0,
@@ -483,6 +520,10 @@ function createDefaultSaveV1(): SaveDataV1 {
     musicVolume: 0.7,
     sfxVolume: 1,
     graphicsQuality: 'high',
+    textScale: 1,
+    motionIntensity: 1,
+    flashIntensity: 1,
+    colorblindMode: 'off',
     v2CodexDiscovered: [],
     v2FactionReputation: {},
   };
@@ -508,10 +549,16 @@ function loadSaveV1(): SaveDataV1 {
         quartermasterUnlocked: data.quartermasterUnlocked ?? false,
         endlessModeUnlocked: data.endlessModeUnlocked ?? false,
         tutorialCompleted: data.tutorialCompleted ?? false,
-        masterVolume: data.masterVolume ?? 1,
-        musicVolume: data.musicVolume ?? 0.7,
-        sfxVolume: data.sfxVolume ?? 1,
-        graphicsQuality: data.graphicsQuality ?? 'high',
+        masterVolume: clamp01(data.masterVolume ?? 1),
+        musicVolume: clamp01(data.musicVolume ?? 0.7),
+        sfxVolume: clamp01(data.sfxVolume ?? 1),
+        graphicsQuality: data.graphicsQuality === 'low' || data.graphicsQuality === 'medium' || data.graphicsQuality === 'high'
+          ? data.graphicsQuality
+          : 'high',
+        textScale: Number.isFinite(data.textScale) ? Math.max(0.8, Math.min(1.4, data.textScale as number)) : 1,
+        motionIntensity: clamp01(data.motionIntensity ?? 1),
+        flashIntensity: clamp01(data.flashIntensity ?? 1),
+        colorblindMode: parseColorblindMode(data.colorblindMode),
         v2CodexDiscovered: Array.isArray(data.v2CodexDiscovered)
           ? data.v2CodexDiscovered.filter((v): v is string => typeof v === 'string')
           : [],
@@ -535,6 +582,30 @@ function writeSaveV1(data: SaveDataV1): void {
     localStorage.setItem(SAVE_KEY, JSON.stringify(data));
   } catch {
     // storage full or unavailable -- swallow
+  }
+}
+
+const RUN_HISTORY_KEY = 'booty_run_history';
+const MAX_RUN_HISTORY = 10;
+
+export function loadRunHistory(): RunHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(RUN_HISTORY_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as RunHistoryEntry[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveRunToHistory(entry: RunHistoryEntry): void {
+  try {
+    const history = loadRunHistory();
+    history.unshift(entry);
+    if (history.length > MAX_RUN_HISTORY) history.length = MAX_RUN_HISTORY;
+    localStorage.setItem(RUN_HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // storage full or unavailable
   }
 }
 
@@ -662,7 +733,7 @@ const WEAPON_UPGRADES = new Set([
 // Victory constants
 // ---------------------------------------------------------------------------
 
-const FINAL_WAVE = 5;
+const FINAL_WAVE = 15;
 
 // ---------------------------------------------------------------------------
 // ProgressionSystem
@@ -906,6 +977,54 @@ export class ProgressionSystem {
     return { ...this.metaStats };
   }
 
+  getRuntimeSettings(): RuntimeSettings {
+    return {
+      masterVolume: this.metaStatsV1.masterVolume,
+      musicVolume: this.metaStatsV1.musicVolume,
+      sfxVolume: this.metaStatsV1.sfxVolume,
+      graphicsQuality: this.metaStatsV1.graphicsQuality,
+      accessibility: {
+        textScale: this.metaStatsV1.textScale,
+        motionIntensity: this.metaStatsV1.motionIntensity,
+        flashIntensity: this.metaStatsV1.flashIntensity,
+        colorblindMode: this.metaStatsV1.colorblindMode,
+      },
+    };
+  }
+
+  updateRuntimeSettings(
+    patch: Partial<Omit<RuntimeSettings, 'accessibility'>> & { accessibility?: Partial<AccessibilitySettings> },
+  ): RuntimeSettings {
+    if (patch.masterVolume != null) {
+      this.metaStatsV1.masterVolume = clamp01(patch.masterVolume);
+    }
+    if (patch.musicVolume != null) {
+      this.metaStatsV1.musicVolume = clamp01(patch.musicVolume);
+    }
+    if (patch.sfxVolume != null) {
+      this.metaStatsV1.sfxVolume = clamp01(patch.sfxVolume);
+    }
+    if (patch.graphicsQuality === 'low' || patch.graphicsQuality === 'medium' || patch.graphicsQuality === 'high') {
+      this.metaStatsV1.graphicsQuality = patch.graphicsQuality;
+    }
+    if (patch.accessibility) {
+      if (patch.accessibility.textScale != null && Number.isFinite(patch.accessibility.textScale)) {
+        this.metaStatsV1.textScale = Math.max(0.8, Math.min(1.4, patch.accessibility.textScale));
+      }
+      if (patch.accessibility.motionIntensity != null) {
+        this.metaStatsV1.motionIntensity = clamp01(patch.accessibility.motionIntensity);
+      }
+      if (patch.accessibility.flashIntensity != null) {
+        this.metaStatsV1.flashIntensity = clamp01(patch.accessibility.flashIntensity);
+      }
+      if (patch.accessibility.colorblindMode != null) {
+        this.metaStatsV1.colorblindMode = parseColorblindMode(patch.accessibility.colorblindMode);
+      }
+    }
+    writeSaveV1(this.metaStatsV1);
+    return this.getRuntimeSettings();
+  }
+
   // -----------------------------------------------------------------------
   // Dev-only setters (for DevPanel)
   // -----------------------------------------------------------------------
@@ -932,6 +1051,16 @@ export class ProgressionSystem {
 
   getMetaStatsV1(): SaveDataV1 {
     return { ...this.metaStatsV1 };
+  }
+
+  isTutorialCompleted(): boolean {
+    return this.metaStatsV1.tutorialCompleted;
+  }
+
+  markTutorialCompleted(): void {
+    if (this.metaStatsV1.tutorialCompleted) return;
+    this.metaStatsV1.tutorialCompleted = true;
+    writeSaveV1(this.metaStatsV1);
   }
 
   getActiveDoctrine(): { id: string; name: string; summary: string } | null {
@@ -1090,14 +1219,14 @@ export class ProgressionSystem {
     const endlessWave = w - FINAL_WAVE;
     return {
       wave: w,
-      totalShips: Math.min(8 + endlessWave * 2, 20),
-      armedPercent: Math.min(0.60 + endlessWave * 0.05, 0.90),
-      speedMultiplier: 1.50 + endlessWave * 0.10,
-      healthMultiplier: 1.70 + endlessWave * 0.15,
+      totalShips: Math.min(14 + endlessWave * 2, 24),
+      armedPercent: Math.min(0.75 + endlessWave * 0.03, 0.95),
+      speedMultiplier: 2.00 + endlessWave * 0.08,
+      healthMultiplier: 2.00 + endlessWave * 0.12,
       weather: weatherForWave(w),
       enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship', 'ghost_ship', 'navy_warship'],
       bossName: endlessWave % 3 === 0 ? 'Endless Dread' : null,
-      bossHp: endlessWave % 3 === 0 ? 500 + endlessWave * 100 : 0,
+      bossHp: endlessWave % 3 === 0 ? 800 + endlessWave * 120 : 0,
       isPortWave: endlessWave % 2 === 0,
       specialEvent: null,
     };
@@ -1124,7 +1253,7 @@ export class ProgressionSystem {
    * Check if the player has achieved victory (completed all waves).
    */
   checkVictory(wave?: number): boolean {
-    const w = wave ?? this.wave;
+    if (this.endlessMode) return false;
     // Victory happens when the final wave is completed
     return this.runStats.wavesCompleted >= this.customFinalWave;
   }
@@ -1140,6 +1269,40 @@ export class ProgressionSystem {
     this.runStats.gold = this.score;
     this.runStats.victory = this.checkVictory();
     return { ...this.runStats };
+  }
+
+  getRunSnapshot(): ProgressionRunSnapshot {
+    return {
+      wave: this.wave,
+      state: this.state,
+      score: this.score,
+      shipsDestroyed: this.shipsDestroyed,
+      shipsTotal: this.shipsTotal,
+      stats: { ...this.stats },
+      acquiredUpgradeIds: [...this.acquiredUpgradeIds],
+      activeSynergies: [...this.activeSynergies],
+      runStats: this.getRunStats(),
+      runTimeSeconds: Math.max(0, (Date.now() - this.runStartTime) / 1000),
+      shipClass: this.shipClass,
+      upgradeBonus: this.upgradeBonus,
+      endlessMode: this.endlessMode,
+    };
+  }
+
+  restoreRunSnapshot(snapshot: ProgressionRunSnapshot): void {
+    this.wave = Math.max(1, snapshot.wave);
+    this.state = snapshot.state;
+    this.score = Math.max(0, snapshot.score);
+    this.shipsDestroyed = Math.max(0, snapshot.shipsDestroyed);
+    this.shipsTotal = Math.max(0, snapshot.shipsTotal);
+    this.stats = { ...snapshot.stats };
+    this.acquiredUpgradeIds = [...snapshot.acquiredUpgradeIds];
+    this.activeSynergies = [...snapshot.activeSynergies];
+    this.runStats = { ...snapshot.runStats };
+    this.runStartTime = Date.now() - Math.max(0, snapshot.runTimeSeconds) * 1000;
+    this.shipClass = snapshot.shipClass;
+    this.upgradeBonus = snapshot.upgradeBonus;
+    this.endlessMode = snapshot.endlessMode;
   }
 
   /** Record damage dealt to enemies */
@@ -1321,7 +1484,7 @@ export class ProgressionSystem {
    */
   getUpgradeChoices(): Upgrade[] {
     const earlyLegendary = this.hasMetaBonus('early_legendary');
-    const legendaryAllowed = earlyLegendary || this.wave >= 3;
+    const legendaryAllowed = earlyLegendary || this.wave >= 5;
 
     // Build available pool excluding already acquired
     const acquired = new Set(this.acquiredUpgradeIds);
@@ -1418,6 +1581,13 @@ export class ProgressionSystem {
 
     // Check for newly unlocked synergies
     return this.checkSynergies();
+  }
+
+  /** Skip the upgrade phase (when pool is exhausted) — still advances wave. */
+  skipUpgrade(): void {
+    this.currentUpgradeChoices = [];
+    this.wave++;
+    this.state = 'pre_wave';
   }
 
   /**
