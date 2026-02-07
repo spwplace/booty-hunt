@@ -2,16 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Booty Hunt</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Pirata+One&display=swap" rel="stylesheet" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #080818; cursor: crosshair; }
-    #game { width: 100vw; height: 100vh; }
-    canvas { display: block; }
+    html, body {
+      overflow: hidden;
+      background: #080818;
+      touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      overscroll-behavior: none;
+      position: fixed;
+      width: 100%; height: 100%;
+    }
+    body { cursor: crosshair; }
+    #game { width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; }
 
     #ui {
       position: fixed;
@@ -26,11 +37,11 @@
       top: 50%; left: 50%;
       transform: translate(-50%, -50%);
       text-align: center;
-      transition: opacity 1.2s ease-out;
+      transition: opacity 0.8s ease-out;
       z-index: 10;
     }
     #title h1 {
-      font-size: clamp(3rem, 10vw, 7rem);
+      font-size: clamp(2.5rem, 10vw, 7rem);
       color: #FFD700;
       text-shadow:
         0 0 30px rgba(255, 200, 0, 0.4),
@@ -40,13 +51,13 @@
     }
     #title .subtitle {
       color: #ccc;
-      font-size: clamp(1rem, 3vw, 1.6rem);
+      font-size: clamp(0.85rem, 3vw, 1.6rem);
       margin-top: 0.8rem;
       opacity: 0.85;
     }
     #title .hint {
       color: #999;
-      font-size: clamp(0.8rem, 2vw, 1rem);
+      font-size: clamp(0.7rem, 2vw, 1rem);
       margin-top: 2.5rem;
       opacity: 0.5;
       animation: pulse 2s ease-in-out infinite;
@@ -67,6 +78,19 @@
       transition: opacity 0.6s;
     }
     #score .label { color: #c9a84c; font-size: 1rem; display: block; }
+
+    /* ---- Combo ---- */
+    #combo {
+      position: absolute;
+      top: 90px; left: 28px;
+      font-size: 1.6rem;
+      color: #ff6644;
+      text-shadow: 2px 2px 0 #000, 0 0 15px rgba(255, 100, 50, 0.4);
+      opacity: 0;
+      transition: opacity 0.3s, transform 0.3s;
+      transform: scale(1);
+    }
+    #combo.show { opacity: 1; transform: scale(1.1); }
 
     /* ---- Compass ---- */
     #compass-container {
@@ -92,18 +116,20 @@
       background: #FFD700;
       border-radius: 50%;
       transform: translate(-50%, -50%);
+      z-index: 2;
     }
     #compass-arrow {
       position: absolute;
-      top: 50%; left: 50%;
+      bottom: 50%; left: 50%;
       width: 0; height: 0;
-      transform-origin: 0 0;
-      border-left: 5px solid transparent;
-      border-right: 5px solid transparent;
-      border-bottom: 42px solid #e04040;
-      transform: translate(-50%, 0) rotate(0deg);
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-bottom: 44px solid #e04040;
+      transform-origin: 50% 100%;
+      transform: translateX(-50%) rotate(0deg);
       filter: drop-shadow(0 0 4px rgba(224, 64, 64, 0.5));
-      transition: transform 0.15s ease-out;
+      transition: transform 0.12s ease-out;
+      z-index: 1;
     }
     .compass-label {
       position: absolute;
@@ -133,18 +159,15 @@
     #capture-text {
       position: absolute;
       top: 38%; left: 50%;
-      transform: translate(-50%, -50%);
+      transform: translate(-50%, -50%) scale(0.8);
       font-size: 3.5rem;
       color: #FFD700;
       text-shadow: 3px 3px 0 #000, 0 0 30px rgba(255, 200, 0, 0.5);
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.4s, transform 0.4s;
+      transition: opacity 0.35s, transform 0.35s cubic-bezier(0.17, 0.67, 0.29, 1.4);
     }
-    #capture-text.show {
-      opacity: 1;
-      transform: translate(-50%, -60%) scale(1.1);
-    }
+    #capture-text.show { opacity: 1; transform: translate(-50%, -60%) scale(1); }
 
     /* ---- Spyglass Vignette ---- */
     #spyglass-vignette {
@@ -171,6 +194,599 @@
       opacity: 0;
       transition: opacity 0.6s;
     }
+
+    /* ---- Virtual Joystick ---- */
+    #joystick-base {
+      position: fixed;
+      width: 120px; height: 120px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 2px solid rgba(255, 215, 0, 0.2);
+      transform: translate(-50%, -50%);
+      opacity: 0;
+      transition: opacity 0.15s;
+      pointer-events: none;
+      z-index: 20;
+    }
+    #joystick-thumb {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      background: rgba(255, 215, 0, 0.2);
+      border: 2px solid rgba(255, 215, 0, 0.4);
+      transform: translate(-50%, -50%);
+    }
+
+    /* ---- Mobile spyglass zone hint ---- */
+    #spyglass-hint {
+      display: none;
+      position: absolute;
+      bottom: 148px; right: 24px;
+      color: rgba(255, 215, 0, 0.25);
+      font-family: 'Pirata One', cursive;
+      font-size: 0.75rem;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+
+    /* ---- Health Bar ---- */
+    #health-bar {
+      position: absolute;
+      top: 24px; right: 28px;
+      width: 180px; height: 20px;
+      background: rgba(0,0,0,0.5);
+      border: 2px solid rgba(255,215,0,0.4);
+      border-radius: 10px;
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+    #health-fill {
+      width: 100%; height: 100%;
+      background: #4caf50;
+      border-radius: 8px;
+      transition: width 0.3s, background-color 0.3s;
+    }
+    #health-bar.damage {
+      animation: damage-flash 0.3s;
+    }
+    @keyframes damage-flash {
+      0%, 100% { border-color: rgba(255,215,0,0.4); }
+      50% { border-color: #f44336; box-shadow: 0 0 12px rgba(244,67,54,0.6); }
+    }
+
+    /* ---- Wave Counter ---- */
+    #wave-counter {
+      position: absolute;
+      top: 24px; left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.7);
+      font-size: 1.1rem;
+      text-shadow: 2px 2px 0 #000;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+
+    /* ---- Wave Announcement ---- */
+    #wave-announce {
+      position: absolute;
+      top: 40%; left: 50%;
+      transform: translate(-50%,-50%) scale(0.7);
+      font-size: clamp(2rem, 8vw, 5rem);
+      color: #FFD700;
+      text-shadow: 3px 3px 0 #000, 0 0 40px rgba(255,200,0,0.6);
+      opacity: 0;
+      transition: opacity 0.5s, transform 0.5s cubic-bezier(0.17,0.67,0.29,1.4);
+      z-index: 8;
+      pointer-events: none;
+    }
+    #wave-announce.show {
+      opacity: 1;
+      transform: translate(-50%,-50%) scale(1);
+    }
+
+    /* ---- Upgrade Screen ---- */
+    #upgrade-screen {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s;
+      z-index: 50;
+    }
+    #upgrade-screen.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #upgrade-screen::before {
+      content: 'Choose Yer Reward';
+      display: block;
+      font-size: clamp(1.5rem,5vw,3rem);
+      color: #FFD700;
+      text-shadow: 2px 2px 0 #000, 0 0 20px rgba(255,200,0,0.4);
+      margin-bottom: 2rem;
+      font-family: 'Pirata One', cursive;
+    }
+    #upgrade-cards {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      padding: 0 1rem;
+    }
+    .upgrade-card {
+      width: 200px;
+      padding: 1.5rem 1rem;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid rgba(255,215,0,0.3);
+      border-radius: 12px;
+      text-align: center;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+      font-family: 'Pirata One', cursive;
+    }
+    .upgrade-card:hover {
+      transform: scale(1.08) translateY(-4px);
+      border-color: #FFD700;
+      box-shadow: 0 0 30px rgba(255,200,0,0.3), 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .upgrade-card.selected {
+      border-color: #FFD700;
+      box-shadow: 0 0 40px rgba(255,200,0,0.5);
+      transform: scale(1.12);
+    }
+    .upgrade-icon {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+    .upgrade-name {
+      color: #FFD700;
+      font-size: 1.3rem;
+      margin-bottom: 0.5rem;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .upgrade-desc {
+      color: rgba(255,255,255,0.7);
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+
+    /* ---- Game Over Screen ---- */
+    #game-over {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.8s;
+      z-index: 60;
+    }
+    #game-over.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .game-over-content {
+      text-align: center;
+      font-family: 'Pirata One', cursive;
+    }
+    .game-over-title {
+      font-size: clamp(2rem, 8vw, 5rem);
+      color: #f44336;
+      text-shadow: 3px 3px 0 #000, 0 0 40px rgba(244,67,54,0.5);
+      margin-bottom: 2rem;
+    }
+    .game-over-stats {
+      margin-bottom: 2rem;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      min-width: 250px;
+      border-bottom: 1px solid rgba(255,215,0,0.15);
+    }
+    .stat-label {
+      color: rgba(255,255,255,0.6);
+      font-size: 1.1rem;
+    }
+    .stat-value {
+      color: #FFD700;
+      font-size: 1.3rem;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .restart-btn {
+      font-family: 'Pirata One', cursive;
+      font-size: 1.5rem;
+      color: #FFD700;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid #FFD700;
+      border-radius: 8px;
+      padding: 0.8rem 2.5rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .restart-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 25px rgba(255,200,0,0.4);
+    }
+
+    /* ---- Mute Indicator ---- */
+    #mute-indicator {
+      position: absolute;
+      top: 52px; right: 28px;
+      color: rgba(255,255,255,0.5);
+      font-size: 0.85rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #mute-indicator.show {
+      opacity: 1;
+    }
+
+    /* ---- Cannon Cooldown Indicators ---- */
+    #cooldown-port, #cooldown-starboard {
+      position: absolute;
+      bottom: 28px;
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,215,0,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      color: rgba(255,215,0,0.6);
+      opacity: 0;
+      transition: opacity 0.6s, border-color 0.3s, box-shadow 0.3s;
+    }
+    #cooldown-port {
+      left: 50%; margin-left: -55px;
+    }
+    #cooldown-starboard {
+      left: 50%; margin-left: 15px;
+    }
+    #cooldown-port.ready, #cooldown-starboard.ready {
+      border-color: #4caf50;
+      box-shadow: 0 0 8px rgba(76,175,80,0.4);
+    }
+    #cooldown-port.reloading, #cooldown-starboard.reloading {
+      border-color: rgba(255,100,50,0.4);
+    }
+
+    /* ---- Mobile Cannon Buttons ---- */
+    #btn-port, #btn-starboard {
+      display: none;
+      position: fixed;
+      bottom: 80px;
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      background: rgba(255,215,0,0.1);
+      border: 2px solid rgba(255,215,0,0.3);
+      color: rgba(255,215,0,0.7);
+      font-family: 'Pirata One', cursive;
+      font-size: 0.9rem;
+      pointer-events: none;
+      z-index: 20;
+      align-items: center;
+      justify-content: center;
+    }
+    #btn-port { left: 16px; }
+    #btn-starboard { right: 16px; }
+    #btn-port.show, #btn-starboard.show {
+      display: flex;
+      pointer-events: auto;
+    }
+
+    /* ---- Boss Health Bar ---- */
+    #boss-health-bar {
+      position: absolute;
+      top: 56px; left: 50%;
+      transform: translateX(-50%);
+      width: 300px;
+      opacity: 0;
+      transition: opacity 0.5s;
+      z-index: 15;
+      text-align: center;
+    }
+    #boss-health-bar.show { opacity: 1; }
+    #boss-name-label {
+      color: #f44336;
+      font-size: 1.1rem;
+      text-shadow: 2px 2px 0 #000;
+      margin-bottom: 4px;
+    }
+    #boss-health-track {
+      position: relative;
+      width: 100%; height: 14px;
+      background: rgba(0,0,0,0.6);
+      border: 2px solid #FFD700;
+      border-radius: 7px;
+      overflow: hidden;
+      box-shadow: 0 0 12px rgba(255,200,0,0.3);
+    }
+    #boss-health-fill {
+      width: 100%; height: 100%;
+      background: linear-gradient(90deg, #f44336, #ff6644);
+      border-radius: 5px;
+      transition: width 0.3s ease;
+    }
+    #boss-phase-line {
+      position: absolute;
+      top: 0; bottom: 0;
+      left: 50%; width: 2px;
+      background: rgba(255,255,255,0.4);
+    }
+
+    /* ---- Wave Preview ---- */
+    #wave-preview {
+      position: absolute;
+      top: 30%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 1.4rem;
+      color: rgba(255,255,255,0.8);
+      text-shadow: 2px 2px 0 #000;
+      opacity: 0;
+      transition: opacity 0.4s;
+      z-index: 7;
+      pointer-events: none;
+      text-align: center;
+    }
+    #wave-preview.show { opacity: 1; }
+
+    /* ---- Minimap ---- */
+    #minimap-container {
+      position: absolute;
+      top: 80px; right: 28px;
+      width: 130px; height: 130px;
+      border: 2px solid rgba(255,215,0,0.3);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.4);
+      overflow: hidden;
+      opacity: 0;
+      transition: opacity 0.6s;
+    }
+    #minimap-container.show { opacity: 1; }
+    #minimap-canvas { width: 100%; height: 100%; }
+
+    /* ---- Synergy Popup ---- */
+    #synergy-popup {
+      position: absolute;
+      top: 20%; left: 50%;
+      transform: translate(-50%, -50%) scale(0.8);
+      font-size: 1.6rem;
+      color: #FFD700;
+      text-shadow: 0 0 20px rgba(255,200,0,0.8), 2px 2px 0 #000;
+      opacity: 0;
+      transition: opacity 0.4s, transform 0.4s cubic-bezier(0.17,0.67,0.29,1.4);
+      z-index: 9;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #synergy-popup.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    /* ---- Port Overlay ---- */
+    #port-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10,5,2,0.92);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.6s;
+      z-index: 55;
+    }
+    #port-overlay.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #port-content {
+      width: 90%;
+      max-width: 700px;
+      font-family: 'Pirata One', cursive;
+    }
+    #port-title {
+      text-align: center;
+      font-size: 2.5rem;
+      color: #FFD700;
+      text-shadow: 2px 2px 0 #000, 0 0 20px rgba(255,200,0,0.4);
+      margin-bottom: 1.5rem;
+    }
+    #port-panels {
+      display: flex;
+      gap: 1.5rem;
+    }
+    #port-shop, #port-repairs {
+      flex: 1;
+      background: rgba(40,20,10,0.8);
+      border: 2px solid rgba(255,215,0,0.3);
+      border-radius: 12px;
+      padding: 1rem;
+    }
+    #port-shop h3, #port-repairs h3 {
+      color: #FFD700;
+      font-size: 1.3rem;
+      margin-bottom: 0.8rem;
+      text-shadow: 1px 1px 0 #000;
+    }
+    #port-shop-list {
+      max-height: 300px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .port-shop-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,215,0,0.15);
+      border-radius: 8px;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .port-shop-item:hover {
+      border-color: #FFD700;
+      background: rgba(255,215,0,0.05);
+    }
+    .port-shop-item.disabled {
+      opacity: 0.4;
+      cursor: default;
+      pointer-events: none;
+    }
+    .port-shop-item .shop-icon { font-size: 1.5rem; }
+    .port-shop-item .shop-info { flex: 1; }
+    .port-shop-item .shop-name { color: #FFD700; font-size: 0.95rem; }
+    .port-shop-item .shop-desc { color: rgba(255,255,255,0.5); font-size: 0.7rem; }
+    .port-shop-item .shop-cost { color: #FFD700; font-size: 0.9rem; white-space: nowrap; }
+    .port-shop-item.tier-common { border-left: 3px solid rgba(255,255,255,0.3); }
+    .port-shop-item.tier-rare { border-left: 3px solid #4488ff; }
+    .port-shop-item.tier-legendary { border-left: 3px solid #FFD700; box-shadow: inset 0 0 8px rgba(255,200,0,0.1); }
+    #port-hp-bar {
+      width: 100%; height: 20px;
+      background: rgba(0,0,0,0.5);
+      border: 2px solid rgba(255,215,0,0.3);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 0.8rem;
+    }
+    #port-hp-fill {
+      width: 100%; height: 100%;
+      background: #4caf50;
+      border-radius: 8px;
+      transition: width 0.3s;
+    }
+    .port-btn {
+      display: block;
+      width: 100%;
+      font-family: 'Pirata One', cursive;
+      font-size: 1rem;
+      color: #FFD700;
+      background: rgba(40,20,10,0.9);
+      border: 2px solid rgba(255,215,0,0.3);
+      border-radius: 8px;
+      padding: 0.6rem;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .port-btn:hover {
+      transform: scale(1.02);
+      border-color: #FFD700;
+    }
+    .port-sail-btn {
+      font-size: 1.4rem;
+      padding: 0.8rem;
+      border-color: #FFD700;
+      margin-top: 0.5rem;
+    }
+    #port-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 1rem;
+    }
+    #port-gold-display {
+      color: #FFD700;
+      font-size: 1.4rem;
+      text-shadow: 2px 2px 0 #000;
+    }
+
+    /* ---- Upgrade Card Tier Badges ---- */
+    .upgrade-card.tier-common { border-color: rgba(255,255,255,0.3); }
+    .upgrade-card.tier-rare { border-color: #4488ff; box-shadow: 0 0 15px rgba(68,136,255,0.2); }
+    .upgrade-card.tier-legendary { border-color: #FFD700; box-shadow: 0 0 20px rgba(255,200,0,0.4); }
+    .tier-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 0.3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .tier-badge.common { background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7); }
+    .tier-badge.rare { background: rgba(68,136,255,0.2); color: #6699ff; }
+    .tier-badge.legendary { background: rgba(255,200,0,0.2); color: #FFD700; }
+
+    /* ---- Low Health Vignette (created by Juice.ts) ---- */
+    /* ---- Hit Direction Indicators (created by Juice.ts) ---- */
+    /* ---- Damage/Combo Flash (created by Juice.ts) ---- */
+
+    /* ---- Mobile adjustments ---- */
+    @media (max-width: 768px) {
+      #score { font-size: 1.4rem; top: env(safe-area-inset-top, 16px); left: 16px; }
+      #score .label { font-size: 0.75rem; }
+      #combo { font-size: 1.2rem; top: 62px; left: 16px; }
+      #compass-container { width: 80px; height: 80px; bottom: 20px; right: 20px; }
+      #compass-arrow { border-bottom-width: 32px; border-left-width: 5px; border-right-width: 5px; }
+      #distance { bottom: 108px; right: 20px; width: 80px; font-size: 0.8rem; }
+      #capture-text { font-size: 2.2rem; }
+      #controls { font-size: 0.7rem; bottom: 16px; left: 16px; }
+      #spyglass-hint { display: block; bottom: 108px; right: 14px; width: 80px; }
+      #health-bar { width: 120px; height: 16px; top: env(safe-area-inset-top, 16px); right: 16px; }
+      #wave-counter { font-size: 0.9rem; top: env(safe-area-inset-top, 16px); }
+      #mute-indicator { top: calc(env(safe-area-inset-top, 16px) + 24px); right: 16px; font-size: 0.75rem; }
+      .upgrade-card { width: 160px; padding: 1rem 0.75rem; }
+      .upgrade-icon { font-size: 2.2rem; }
+      .upgrade-name { font-size: 1.1rem; }
+      .upgrade-desc { font-size: 0.75rem; }
+      #upgrade-cards { gap: 1rem; }
+      .game-over-title { font-size: clamp(1.8rem, 7vw, 3.5rem); }
+      .stat-row { min-width: 200px; }
+      .stat-label { font-size: 0.95rem; }
+      .stat-value { font-size: 1.1rem; }
+      .restart-btn { font-size: 1.2rem; padding: 0.6rem 2rem; }
+      #cooldown-port, #cooldown-starboard { width: 34px; height: 34px; font-size: 0.7rem; bottom: 20px; }
+      #btn-port, #btn-starboard { width: 56px; height: 56px; bottom: 60px; font-size: 0.8rem; }
+      #boss-health-bar { width: 200px; top: calc(env(safe-area-inset-top, 16px) + 28px); }
+      #boss-name-label { font-size: 0.9rem; }
+      #boss-health-track { height: 10px; }
+      #minimap-container { width: 90px; height: 90px; top: calc(env(safe-area-inset-top, 16px) + 28px); right: 16px; }
+      #wave-preview { font-size: 1rem; }
+      #synergy-popup { font-size: 1.2rem; }
+      #port-panels { flex-direction: column; }
+      #port-title { font-size: 1.8rem; }
+      #port-shop-list { max-height: 200px; }
+      .port-shop-item .shop-icon { font-size: 1.2rem; }
+      .port-shop-item .shop-name { font-size: 0.85rem; }
+    }
+    @media (max-height: 500px) {
+      #score { font-size: 1.2rem; top: 8px; left: 12px; }
+      #score .label { display: none; }
+      #compass-container { width: 60px; height: 60px; bottom: 12px; right: 12px; }
+      #compass-arrow { border-bottom-width: 24px; border-left-width: 4px; border-right-width: 4px; }
+      #distance { bottom: 78px; right: 12px; width: 60px; font-size: 0.7rem; }
+      #health-bar { width: 100px; height: 14px; top: 8px; right: 12px; }
+      #wave-counter { font-size: 0.8rem; top: 8px; }
+      #mute-indicator { top: 28px; right: 12px; font-size: 0.7rem; }
+      .upgrade-card { width: 140px; padding: 0.8rem 0.6rem; }
+      .upgrade-icon { font-size: 1.8rem; }
+      .upgrade-name { font-size: 1rem; }
+      .upgrade-desc { font-size: 0.7rem; }
+      #cooldown-port, #cooldown-starboard { width: 30px; height: 30px; font-size: 0.65rem; bottom: 12px; }
+      #boss-health-bar { width: 160px; top: 28px; }
+      #minimap-container { width: 70px; height: 70px; top: 28px; right: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -179,9 +795,10 @@
     <div id="title">
       <h1>Booty Hunt</h1>
       <p class="subtitle">The ocean be vast... but so be yer greed</p>
-      <p class="hint">Press any key to set sail</p>
+      <p class="hint" id="title-hint">Press any key to set sail</p>
     </div>
     <div id="score"><span class="label">Gold Plundered</span>0</div>
+    <div id="combo"></div>
     <div id="compass-container">
       <div class="compass-ring">
         <span class="compass-label compass-n">N</span>
@@ -195,11 +812,65 @@
     <div id="distance"></div>
     <div id="capture-text"></div>
     <div id="spyglass-vignette"></div>
+    <div id="spyglass-hint">Hold right side for spyglass</div>
     <div id="controls">
       WASD - Sail<br/>
-      SPACE - Spyglass
+      Q / E - Cannons<br/>
+      SPACE - Spyglass<br/>
+      M - Mute
+    </div>
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <div id="wave-counter"></div>
+    <div id="wave-announce"></div>
+    <div id="upgrade-screen"><div id="upgrade-cards"></div></div>
+    <div id="game-over"></div>
+    <div id="mute-indicator">MUTED</div>
+    <div id="cooldown-port">Q</div>
+    <div id="cooldown-starboard">E</div>
+
+    <!-- Boss Health Bar -->
+    <div id="boss-health-bar">
+      <div id="boss-name-label"></div>
+      <div id="boss-health-track"><div id="boss-health-fill"></div><div id="boss-phase-line"></div></div>
+    </div>
+
+    <!-- Wave Preview -->
+    <div id="wave-preview"></div>
+
+    <!-- Minimap -->
+    <div id="minimap-container">
+      <canvas id="minimap-canvas" width="130" height="130"></canvas>
+    </div>
+
+    <!-- Synergy Popup -->
+    <div id="synergy-popup"></div>
+
+    <!-- Port Overlay -->
+    <div id="port-overlay">
+      <div id="port-content">
+        <h2 id="port-title">Port Royal</h2>
+        <div id="port-panels">
+          <div id="port-shop">
+            <h3>Ship Upgrades</h3>
+            <div id="port-shop-list"></div>
+          </div>
+          <div id="port-repairs">
+            <h3>Repairs</h3>
+            <div id="port-hp-bar"><div id="port-hp-fill"></div></div>
+            <button id="port-repair-btn" class="port-btn">Repair 10 HP (100g)</button>
+            <button id="port-full-repair-btn" class="port-btn">Full Repair</button>
+          </div>
+        </div>
+        <div id="port-footer">
+          <div id="port-gold-display">Gold: 0</div>
+          <button id="port-set-sail-btn" class="port-btn port-sail-btn">Set Sail</button>
+        </div>
+      </div>
     </div>
   </div>
+  <div id="joystick-base"><div id="joystick-thumb"></div></div>
+  <div id="btn-port">PORT</div>
+  <div id="btn-starboard">STBD</div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

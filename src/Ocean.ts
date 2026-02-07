@@ -2,6 +2,7 @@ import * as THREE from 'three';
 
 const vertexShader = /* glsl */ `
   uniform float uTime;
+  uniform float uWaveScale;
   varying vec3 vWorldPos;
   varying float vElevation;
   varying float vFogDepth;
@@ -16,13 +17,30 @@ const vertexShader = /* glsl */ `
   }
 
   void main() {
-    vec3 pos = position;
+    vec3 worldBase = (modelMatrix * vec4(position, 1.0)).xyz;
+    vec2 b = worldBase.xz;
 
-    pos += gerstnerWave(pos.xz, 0.25, 13.0, vec2(1.0, 0.5), uTime * 0.8);
-    pos += gerstnerWave(pos.xz, 0.15, 7.5, vec2(-0.3, 1.0), uTime * 1.05);
-    pos += gerstnerWave(pos.xz, 0.10, 4.5, vec2(0.7, -0.4), uTime * 0.9);
-    pos += gerstnerWave(pos.xz, 0.06, 2.5, vec2(-0.5, -0.8), uTime * 1.3);
+    vec3 disp = vec3(0.0);
 
+    // Long ocean swells — big gentle rolling hills
+    disp += gerstnerWave(b, 0.06, 38.0, vec2( 1.0,  0.2), uTime * 0.6);
+    disp += gerstnerWave(b, 0.07, 24.0, vec2(-0.3,  0.9), uTime * 0.7);
+
+    // Primary waves — the main visible crests
+    disp += gerstnerWave(b, 0.20, 12.5, vec2( 0.6,  0.8), uTime * 0.85);
+    disp += gerstnerWave(b, 0.16,  8.5, vec2(-0.8, -0.4), uTime * 1.0);
+
+    // Chop — shorter, faster, cross-directional
+    disp += gerstnerWave(b, 0.13,  5.2, vec2( 0.2, -1.0), uTime * 1.1);
+    disp += gerstnerWave(b, 0.11,  3.8, vec2(-0.9,  0.3), uTime * 1.0);
+
+    // Ripples — fine detail
+    disp += gerstnerWave(b, 0.09,  2.3, vec2( 0.7,  0.7), uTime * 1.3);
+    disp += gerstnerWave(b, 0.07,  1.6, vec2(-0.5, -0.8), uTime * 1.5);
+
+    disp *= uWaveScale;
+
+    vec3 pos = position + disp;
     vElevation = pos.y;
     vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
 
@@ -41,39 +59,107 @@ const fragmentShader = /* glsl */ `
   varying float vElevation;
   varying float vFogDepth;
 
+  // ---- Noise ----
+  float hash21(vec2 p) {
+    p = fract(p * vec2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return fract(p.x * p.y);
+  }
+
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
+  float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; i++) {
+      v += a * vnoise(p);
+      p *= 2.1;
+      a *= 0.45;
+    }
+    return v;
+  }
+
   void main() {
-    // Flat-shading normal via screen-space derivatives
-    vec3 normal = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+    // ---- Normals ----
+    vec3 flatN = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
 
-    // Ocean colour gradient based on wave height
-    vec3 deep    = vec3(0.01, 0.06, 0.20);
-    vec3 mid     = vec3(0.04, 0.22, 0.36);
-    vec3 shallow = vec3(0.08, 0.50, 0.55);
+    // Detail normal perturbation for specular shimmer only
+    vec2 nUV1 = vWorldPos.xz * 0.6 + uTime * vec2(0.18, 0.12);
+    vec2 nUV2 = vWorldPos.xz * 1.1 + uTime * vec2(-0.12, 0.22);
+    float eps = 0.04;
+    float nx = (vnoise(nUV1 + vec2(eps, 0.0)) - vnoise(nUV1 - vec2(eps, 0.0)))
+             + (vnoise(nUV2 + vec2(eps, 0.0)) - vnoise(nUV2 - vec2(eps, 0.0))) * 0.6;
+    float nz = (vnoise(nUV1 + vec2(0.0, eps)) - vnoise(nUV1 - vec2(0.0, eps)))
+             + (vnoise(nUV2 + vec2(0.0, eps)) - vnoise(nUV2 - vec2(0.0, eps))) * 0.6;
+    vec3 detailN = normalize(flatN + vec3(nx * 0.35, 0.0, nz * 0.35));
 
-    float t = smoothstep(-1.2, 2.0, vElevation);
-    vec3 color = mix(deep, mid, smoothstep(0.0, 0.4, t));
-    color = mix(color, shallow, smoothstep(0.4, 0.85, t));
+    // ---- Setup ----
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    vec3 L = uSunDir;
+    float NdotL = max(dot(flatN, L), 0.0);
+    float NdotV = max(dot(flatN, V), 0.0);
 
-    // Foam on wave crests
-    vec3 foam = vec3(0.82, 0.90, 0.95);
-    float foamAmt = smoothstep(0.65, 1.0, vElevation) * 0.65;
-    color = mix(color, foam, foamAmt);
+    // ---- Base colour ----
+    vec3 deep    = vec3(0.005, 0.035, 0.14);
+    vec3 mid     = vec3(0.015, 0.13, 0.28);
+    vec3 shallow = vec3(0.04, 0.38, 0.44);
+    vec3 bright  = vec3(0.10, 0.52, 0.50);
 
-    // Diffuse lighting
-    float diff = max(dot(normal, uSunDir), 0.0) * 0.55 + 0.45;
+    float depthT = smoothstep(-1.5, 2.5, vElevation);
+    vec3 color = mix(deep, mid, smoothstep(0.0, 0.35, depthT));
+    color = mix(color, shallow, smoothstep(0.35, 0.7, depthT));
+    color = mix(color, bright, smoothstep(0.75, 1.0, depthT));
+
+    // ---- Subsurface scattering ----
+    vec3 sssDir = normalize(-L + flatN * 0.4);
+    float sss = pow(clamp(dot(V, sssDir), 0.0, 1.0), 3.0);
+    sss *= smoothstep(0.2, 1.0, vElevation);
+    color += vec3(0.06, 0.30, 0.25) * sss * 0.9;
+
+    // ---- Diffuse (half-lambert) ----
+    float diff = NdotL * 0.5 + 0.5;
     color *= diff;
 
-    // Specular highlight
-    vec3 viewDir = normalize(cameraPosition - vWorldPos);
-    vec3 halfDir = normalize(uSunDir + viewDir);
-    float spec = pow(max(dot(normal, halfDir), 0.0), 200.0);
-    color += vec3(1.0, 0.92, 0.80) * spec * 0.9;
+    // ---- Foam ----
+    vec2 foamUV = vWorldPos.xz * 0.25 + uTime * 0.1;
+    float foamNoise = fbm(foamUV);
+    float foamMask = smoothstep(0.5, 1.1, vElevation);
+    foamMask *= smoothstep(0.35, 0.65, foamNoise);
+    float foamEdge = smoothstep(0.3, 0.55, vElevation) * smoothstep(0.7, 0.45, vElevation);
+    foamEdge *= smoothstep(0.5, 0.7, fbm(vWorldPos.xz * 0.4 - uTime * 0.06));
+    foamMask = max(foamMask, foamEdge * 0.4);
+    vec3 foam = vec3(0.82, 0.90, 0.95);
+    color = mix(color, foam, foamMask * 0.7);
 
-    // Subsurface / Fresnel rim
-    float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 4.0);
-    color = mix(color, vec3(0.15, 0.55, 0.75), fresnel * 0.2);
+    // ---- Specular: sun streak ----
+    vec3 H = normalize(L + V);
+    float dNdotH = max(dot(detailN, H), 0.0);
+    float specTight = pow(dNdotH, 350.0);
+    float specWide  = pow(dNdotH, 24.0);
+    color += vec3(1.0, 0.88, 0.65) * specTight * 1.5;
+    color += vec3(0.9, 0.65, 0.35) * specWide * 0.12;
 
-    // Fog
+    // ---- Sun glitter ----
+    vec2 glitterCell = floor(vWorldPos.xz * 1.8 + uTime * 0.3);
+    float glitterRand = hash21(glitterCell);
+    float glitterMask = step(0.92, glitterRand);
+    float glitterSpec = pow(dNdotH, 12.0);
+    color += vec3(1.0, 0.95, 0.8) * glitterMask * glitterSpec * 2.5;
+
+    // ---- Fresnel / sky reflection ----
+    float fresnel = pow(1.0 - NdotV, 5.0);
+    vec3 skyReflect = mix(vec3(0.10, 0.06, 0.16), vec3(0.35, 0.18, 0.10), fresnel);
+    color = mix(color, skyReflect, fresnel * 0.35);
+
+    // ---- Fog ----
     float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vFogDepth * vFogDepth);
     color = mix(color, uFogColor, clamp(fogFactor, 0.0, 1.0));
 
@@ -81,20 +167,36 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
-// Wave params must match the vertex shader exactly
+// Must exactly match the vertex shader
 const WAVES = [
-  { s: 0.25, w: 13.0, d: [1.0, 0.5], tm: 0.8 },
-  { s: 0.15, w: 7.5, d: [-0.3, 1.0], tm: 1.05 },
-  { s: 0.10, w: 4.5, d: [0.7, -0.4], tm: 0.9 },
-  { s: 0.06, w: 2.5, d: [-0.5, -0.8], tm: 1.3 },
+  // Long swells
+  { s: 0.06, w: 38.0, d: [1.0, 0.2],   tm: 0.6 },
+  { s: 0.07, w: 24.0, d: [-0.3, 0.9],  tm: 0.7 },
+  // Primary waves
+  { s: 0.20, w: 12.5, d: [0.6, 0.8],   tm: 0.85 },
+  { s: 0.16, w: 8.5,  d: [-0.8, -0.4], tm: 1.0 },
+  // Chop
+  { s: 0.13, w: 5.2,  d: [0.2, -1.0],  tm: 1.1 },
+  { s: 0.11, w: 3.8,  d: [-0.9, 0.3],  tm: 1.0 },
+  // Ripples
+  { s: 0.09, w: 2.3,  d: [0.7, 0.7],   tm: 1.3 },
+  { s: 0.07, w: 1.6,  d: [-0.5, -0.8], tm: 1.5 },
 ];
+
+export interface WaveInfo {
+  height: number;
+  slopeX: number;
+  slopeZ: number;
+}
 
 export class Ocean {
   mesh: THREE.Mesh;
   material: THREE.ShaderMaterial;
 
   constructor(fogColor: THREE.Color, fogDensity: number) {
-    const geo = new THREE.PlaneGeometry(400, 400, 128, 128);
+    const isMobile = navigator.maxTouchPoints > 0 || 'ontouchstart' in globalThis;
+    const segments = isMobile ? 100 : 180;
+    const geo = new THREE.PlaneGeometry(300, 300, segments, segments);
     geo.rotateX(-Math.PI / 2);
     const nonIndexed = geo.toNonIndexed();
 
@@ -104,6 +206,7 @@ export class Ocean {
         uSunDir: { value: new THREE.Vector3(0.4, 0.6, 0.3).normalize() },
         uFogColor: { value: fogColor },
         uFogDensity: { value: fogDensity },
+        uWaveScale: { value: 1.0 },
       },
       vertexShader,
       fragmentShader,
@@ -114,14 +217,31 @@ export class Ocean {
 
   update(time: number, playerPos: THREE.Vector3) {
     this.material.uniforms.uTime.value = time;
-    // Keep ocean centered on the player (snapped to avoid shimmer)
     this.mesh.position.x = Math.round(playerPos.x / 4) * 4;
     this.mesh.position.z = Math.round(playerPos.z / 4) * 4;
   }
 
-  /** CPU-side wave height for a world position. Must mirror the vertex shader. */
-  getWaveHeight(x: number, z: number, time: number): number {
-    let y = 0;
+  setFogColor(color: THREE.Color) {
+    this.material.uniforms.uFogColor.value = color;
+  }
+
+  setFogDensity(density: number) {
+    this.material.uniforms.uFogDensity.value = density;
+  }
+
+  setSunDirection(dir: THREE.Vector3) {
+    this.material.uniforms.uSunDir.value = dir;
+  }
+
+  setWaveScale(scale: number) {
+    this.material.uniforms.uWaveScale.value = scale;
+  }
+
+  /** Wave height + surface slope at a world-space coordinate. */
+  getWaveInfo(x: number, z: number, time: number, waveScale: number = 1.0): WaveInfo {
+    let height = 0;
+    let slopeX = 0;
+    let slopeZ = 0;
     for (const w of WAVES) {
       const k = 6.28318 / w.w;
       const c = Math.sqrt(9.8 / k);
@@ -129,8 +249,16 @@ export class Ocean {
       const dx = w.d[0] / len;
       const dz = w.d[1] / len;
       const f = k * (dx * x + dz * z - c * time * w.tm);
-      y += (w.s / k) * Math.sin(f);
+      const a = w.s / k;
+      height += a * Math.sin(f);
+      const dcos = a * k * Math.cos(f);
+      slopeX += dcos * dx;
+      slopeZ += dcos * dz;
     }
-    return y;
+    return {
+      height: height * waveScale,
+      slopeX: slopeX * waveScale,
+      slopeZ: slopeZ * waveScale,
+    };
   }
 }
