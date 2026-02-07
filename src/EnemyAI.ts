@@ -38,6 +38,20 @@ const FORMATION_ENGAGE_DIST = 45;
 const FORMATION_FIRE_ARC = Math.PI / 3; // ~60 degrees from broadside
 const FORMATION_FIRE_COOLDOWN = 3.5;
 
+const DEFAULT_PRESSURE_PROFILE = {
+  speedMult: 1,
+  turnRateMult: 1,
+  fireCooldownMult: 1,
+  fireRangeMult: 1,
+  broadsideArcMult: 1,
+  engageRangeMult: 1,
+  fleeUrgencyMult: 1,
+  beelineExplodeRangeMult: 1,
+  ghostPhaseIntervalMult: 1,
+};
+
+export type EnemyAIPressureProfile = Partial<typeof DEFAULT_PRESSURE_PROFILE>;
+
 // ---------------------------------------------------------------------------
 //  Angle helpers
 // ---------------------------------------------------------------------------
@@ -64,6 +78,18 @@ function distXZ(a: THREE.Vector3, b: THREE.Vector3): number {
 // ---------------------------------------------------------------------------
 
 export class EnemyAISystem {
+  private static pressureProfile = { ...DEFAULT_PRESSURE_PROFILE };
+
+  static setPressureProfile(profile: EnemyAIPressureProfile): void {
+    EnemyAISystem.pressureProfile = {
+      ...DEFAULT_PRESSURE_PROFILE,
+      ...profile,
+    };
+  }
+
+  static resetPressureProfile(): void {
+    EnemyAISystem.pressureProfile = { ...DEFAULT_PRESSURE_PROFILE };
+  }
 
   // -----------------------------------------------------------------------
   //  Spawn list generation
@@ -203,12 +229,14 @@ export class EnemyAISystem {
     playerPos: THREE.Vector3,
     dt: number,
   ): void {
+    const p = EnemyAISystem.pressureProfile;
     const dist = distXZ(m.pos, playerPos);
+    const urgencyRange = FLEE_URGENCY_RANGE * p.fleeUrgencyMult;
 
     // If far from player, keep sailing straight (don't actively flee)
-    if (dist > FLEE_URGENCY_RANGE * 2.5) {
+    if (dist > urgencyRange * 2.5) {
       m.state = 'sailing';
-      m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed, 1 - Math.exp(-2 * dt));
+      m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed * p.speedMult, 1 - Math.exp(-2 * dt));
       // Gentle wander
       m.heading += (Math.sin(performance.now() * 0.001 + m.id * 7) * 0.2) * dt;
       return;
@@ -218,7 +246,7 @@ export class EnemyAISystem {
     m.state = 'fleeing';
     const awayAngle = angleTo(playerPos, m.pos);
     const angleDiff = normalizeAngle(awayAngle - m.heading);
-    m.heading += angleDiff * FLEE_TURN_RATE * dt;
+    m.heading += angleDiff * FLEE_TURN_RATE * p.turnRateMult * dt;
 
     // Zigzag evasion (more frantic when close)
     m.zigzagTimer -= dt;
@@ -226,11 +254,11 @@ export class EnemyAISystem {
       m.zigzagTimer = FLEE_ZIGZAG_INTERVAL_MIN + Math.random() * (FLEE_ZIGZAG_INTERVAL_MAX - FLEE_ZIGZAG_INTERVAL_MIN);
       m.zigzagDir *= -1;
     }
-    const urgency = 1 - Math.min(1, dist / FLEE_URGENCY_RANGE);
-    m.heading += m.zigzagDir * 0.9 * dt * (1 + urgency * 0.8);
+    const urgency = 1 - Math.min(1, dist / urgencyRange);
+    m.heading += m.zigzagDir * 0.9 * p.turnRateMult * dt * (1 + urgency * 0.8);
 
     // Accelerate to flee speed (1.5x base)
-    const fleeSpeed = m.baseSpeed * 1.5;
+    const fleeSpeed = m.baseSpeed * 1.5 * p.speedMult;
     m.speed = Math.min(fleeSpeed, m.speed + 6 * dt);
   }
 
@@ -249,14 +277,16 @@ export class EnemyAISystem {
     _playerHeading: number,
     dt: number,
   ): void {
+    const p = EnemyAISystem.pressureProfile;
     const dist = distXZ(m.pos, playerPos);
     const toPlayerAngle = angleTo(m.pos, playerPos);
+    const chaseDist = CIRCLE_CHASE_DIST * p.engageRangeMult;
 
-    if (dist > CIRCLE_CHASE_DIST) {
+    if (dist > chaseDist) {
       // Too far -- chase
       const angleDiff = normalizeAngle(toPlayerAngle - m.heading);
-      m.heading += angleDiff * CIRCLE_TURN_RATE * dt;
-      m.speed = Math.min(m.baseSpeed * 1.8, m.speed + 5 * dt);
+      m.heading += angleDiff * CIRCLE_TURN_RATE * p.turnRateMult * dt;
+      m.speed = Math.min(m.baseSpeed * 1.8 * p.speedMult, m.speed + 5 * dt);
       return;
     }
 
@@ -278,10 +308,10 @@ export class EnemyAISystem {
     }
 
     const angleDiff = normalizeAngle(orbitAngle - m.heading);
-    m.heading += angleDiff * CIRCLE_TURN_RATE * dt;
+    m.heading += angleDiff * CIRCLE_TURN_RATE * p.turnRateMult * dt;
 
     // Orbit speed
-    const orbitSpeed = m.baseSpeed * CIRCLE_ORBIT_SPEED;
+    const orbitSpeed = m.baseSpeed * CIRCLE_ORBIT_SPEED * p.speedMult;
     m.speed = THREE.MathUtils.lerp(m.speed, orbitSpeed, 1 - Math.exp(-3 * dt));
 
     // Boss enrage: faster orbit and tighter distance
@@ -304,12 +334,13 @@ export class EnemyAISystem {
     playerPos: THREE.Vector3,
     dt: number,
   ): void {
+    const p = EnemyAISystem.pressureProfile;
     const toPlayerAngle = angleTo(m.pos, playerPos);
     const angleDiff = normalizeAngle(toPlayerAngle - m.heading);
-    m.heading += angleDiff * BEELINE_TURN_RATE * dt;
+    m.heading += angleDiff * BEELINE_TURN_RATE * p.turnRateMult * dt;
 
     // Full speed ahead
-    const chargeSpeed = m.baseSpeed * 1.2;
+    const chargeSpeed = m.baseSpeed * 1.2 * p.speedMult;
     m.speed = Math.min(chargeSpeed, m.speed + 8 * dt);
 
     // Update flee timer as a proximity self-destruct check
@@ -332,12 +363,14 @@ export class EnemyAISystem {
     if (merchant.enemyType !== 'fire_ship') return null;
     if (merchant.state === 'sinking') return null;
 
+    const p = EnemyAISystem.pressureProfile;
     const config = ENEMY_TYPE_CONFIGS.fire_ship;
     const dist = distXZ(merchant.pos, playerPos);
     const radius = merchant.explosionRadius || config.explosionRadius || 10;
+    const selfDestructRange = BEELINE_SELF_DESTRUCT_RANGE * p.beelineExplodeRangeMult;
 
     // Self-destruct: close enough to player
-    if (dist < BEELINE_SELF_DESTRUCT_RANGE) {
+    if (dist < selfDestructRange) {
       // Damage falls off with distance, but at this range it's near-max
       const falloff = 1 - Math.min(1, dist / radius);
       const baseDamage = 40;
@@ -384,8 +417,9 @@ export class EnemyAISystem {
     if (merchant.enemyType !== 'ghost_ship') return;
     if (merchant.state === 'sinking') return;
 
+    const p = EnemyAISystem.pressureProfile;
     const config = ENEMY_TYPE_CONFIGS.ghost_ship;
-    const phaseDuration = config.phaseDuration ?? GHOST_PHASE_INTERVAL;
+    const phaseDuration = (config.phaseDuration ?? GHOST_PHASE_INTERVAL) * p.ghostPhaseIntervalMult;
 
     // Tick phase timer
     merchant.phaseTimer -= dt;
@@ -427,6 +461,7 @@ export class EnemyAISystem {
     playerPos: THREE.Vector3,
     dt: number,
   ): void {
+    const p = EnemyAISystem.pressureProfile;
     const dist = distXZ(m.pos, playerPos);
     const config = ENEMY_TYPE_CONFIGS.ghost_ship;
 
@@ -435,8 +470,8 @@ export class EnemyAISystem {
       // Flee behavior
       const awayAngle = angleTo(playerPos, m.pos);
       const angleDiff = normalizeAngle(awayAngle - m.heading);
-      m.heading += angleDiff * 3.0 * dt;
-      m.speed = Math.min(m.baseSpeed * GHOST_FLEE_SPEED_MULT, m.speed + 5 * dt);
+      m.heading += angleDiff * 3.0 * p.turnRateMult * dt;
+      m.speed = Math.min(m.baseSpeed * GHOST_FLEE_SPEED_MULT * p.speedMult, m.speed + 5 * dt);
       return;
     }
 
@@ -445,22 +480,22 @@ export class EnemyAISystem {
       // Approach
       const toPlayerAngle = angleTo(m.pos, playerPos);
       const angleDiff = normalizeAngle(toPlayerAngle - m.heading);
-      m.heading += angleDiff * 2.5 * dt;
-      m.speed = Math.min(m.baseSpeed * 1.3, m.speed + 4 * dt);
+      m.heading += angleDiff * 2.5 * p.turnRateMult * dt;
+      m.speed = Math.min(m.baseSpeed * 1.3 * p.speedMult, m.speed + 4 * dt);
     } else if (dist < 12) {
       // Too close, back off
       const awayAngle = angleTo(playerPos, m.pos);
       const angleDiff = normalizeAngle(awayAngle - m.heading);
-      m.heading += angleDiff * 2.5 * dt;
-      m.speed = Math.min(m.baseSpeed * 1.2, m.speed + 4 * dt);
+      m.heading += angleDiff * 2.5 * p.turnRateMult * dt;
+      m.speed = Math.min(m.baseSpeed * 1.2 * p.speedMult, m.speed + 4 * dt);
     } else {
       // Orbit at comfortable range
       const toPlayerAngle = angleTo(m.pos, playerPos);
       const orbitDir = m.id % 2 === 0 ? 1 : -1;
       const orbitAngle = toPlayerAngle + (Math.PI / 2.5) * orbitDir;
       const angleDiff = normalizeAngle(orbitAngle - m.heading);
-      m.heading += angleDiff * 2.0 * dt;
-      m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed, 1 - Math.exp(-2 * dt));
+      m.heading += angleDiff * 2.0 * p.turnRateMult * dt;
+      m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed * p.speedMult, 1 - Math.exp(-2 * dt));
     }
   }
 
@@ -536,6 +571,7 @@ export class EnemyAISystem {
     dt: number,
     allMerchants: MerchantV1[],
   ): void {
+    const p = EnemyAISystem.pressureProfile;
     const dist = distXZ(m.pos, playerPos);
 
     // Is this ship the formation leader?
@@ -543,26 +579,26 @@ export class EnemyAISystem {
 
     if (isLeader) {
       // Leader: navigate toward player for engagement
-      if (dist > FORMATION_ENGAGE_DIST) {
+      if (dist > FORMATION_ENGAGE_DIST * p.engageRangeMult) {
         // Approach
         const toPlayerAngle = angleTo(m.pos, playerPos);
         const angleDiff = normalizeAngle(toPlayerAngle - m.heading);
-        m.heading += angleDiff * FORMATION_TURN_RATE * dt;
-        m.speed = Math.min(m.baseSpeed * 1.5, m.speed + 3 * dt);
+        m.heading += angleDiff * FORMATION_TURN_RATE * p.turnRateMult * dt;
+        m.speed = Math.min(m.baseSpeed * 1.5 * p.speedMult, m.speed + 3 * dt);
       } else if (dist < 12) {
         // Too close, back off slightly to maintain broadside range
         const awayAngle = angleTo(playerPos, m.pos);
         const angleDiff = normalizeAngle(awayAngle - m.heading);
-        m.heading += angleDiff * FORMATION_TURN_RATE * dt;
-        m.speed = Math.min(m.baseSpeed * 1.2, m.speed + 3 * dt);
+        m.heading += angleDiff * FORMATION_TURN_RATE * p.turnRateMult * dt;
+        m.speed = Math.min(m.baseSpeed * 1.2 * p.speedMult, m.speed + 3 * dt);
       } else {
         // Circle at broadside range
         const toPlayerAngle = angleTo(m.pos, playerPos);
         const orbitDir = m.id % 2 === 0 ? 1 : -1;
         const orbitAngle = toPlayerAngle + (Math.PI / 3) * orbitDir;
         const angleDiff = normalizeAngle(orbitAngle - m.heading);
-        m.heading += angleDiff * FORMATION_TURN_RATE * dt;
-        m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed * 1.3, 1 - Math.exp(-2 * dt));
+        m.heading += angleDiff * FORMATION_TURN_RATE * p.turnRateMult * dt;
+        m.speed = THREE.MathUtils.lerp(m.speed, m.baseSpeed * 1.3 * p.speedMult, 1 - Math.exp(-2 * dt));
       }
     } else {
       // Follower: maintain formation offset relative to leader
@@ -583,7 +619,7 @@ export class EnemyAISystem {
 
         const toTarget = angleTo(m.pos, target);
         const angleDiff = normalizeAngle(toTarget - m.heading);
-        m.heading += angleDiff * (FORMATION_TURN_RATE * 1.5) * dt;
+        m.heading += angleDiff * (FORMATION_TURN_RATE * 1.5) * p.turnRateMult * dt;
 
         // Match leader speed with slight adjustment for formation keeping
         const targetDist = distXZ(m.pos, target);
@@ -617,6 +653,7 @@ export class EnemyAISystem {
     merchant: MerchantV1,
     playerPos: THREE.Vector3,
   ): boolean {
+    const p = EnemyAISystem.pressureProfile;
     if (!merchant.armed) return false;
     if (merchant.state === 'sinking' || merchant.state === 'surrendering') return false;
     if (merchant.fireTimer > 0) return false;
@@ -631,7 +668,7 @@ export class EnemyAISystem {
     if (config.behavior === 'beeline') return false;
 
     // Range check
-    const fireRange = merchant.isBoss ? 55 : 45;
+    const fireRange = (merchant.isBoss ? 55 : 45) * p.fireRangeMult;
     if (dist > fireRange) return false;
 
     // Broadside check for circle_strafe and formation behaviors
@@ -645,7 +682,7 @@ export class EnemyAISystem {
       const starboardDiff = Math.abs(relativeAngle + Math.PI / 2);
       const minBroadsideDiff = Math.min(portDiff, starboardDiff);
 
-      const arc = config.behavior === 'formation' ? FORMATION_FIRE_ARC : CIRCLE_FIRE_ARC;
+      const arc = (config.behavior === 'formation' ? FORMATION_FIRE_ARC : CIRCLE_FIRE_ARC) * p.broadsideArcMult;
       if (minBroadsideDiff > arc) return false;
     }
 
@@ -663,16 +700,17 @@ export class EnemyAISystem {
    * Get the base fire cooldown for an enemy based on its type and boss status.
    */
   static getFireCooldown(merchant: MerchantV1): number {
-    if (merchant.isBoss && merchant.bossEnraged) return 0.8 + Math.random() * 0.5;
-    if (merchant.isBoss) return 1.5 + Math.random() * 1.0;
+    const p = EnemyAISystem.pressureProfile;
+    if (merchant.isBoss && merchant.bossEnraged) return (0.8 + Math.random() * 0.5) * p.fireCooldownMult;
+    if (merchant.isBoss) return (1.5 + Math.random() * 1.0) * p.fireCooldownMult;
 
     const config = ENEMY_TYPE_CONFIGS[merchant.enemyType];
 
     switch (config.behavior) {
-      case 'circle_strafe': return 2.5 + Math.random() * 1.5;
-      case 'phase': return 2.0 + Math.random() * 1.5;
-      case 'formation': return FORMATION_FIRE_COOLDOWN + Math.random() * 1.0;
-      default: return 3.0 + Math.random() * 2.0;
+      case 'circle_strafe': return (2.5 + Math.random() * 1.5) * p.fireCooldownMult;
+      case 'phase': return (2.0 + Math.random() * 1.5) * p.fireCooldownMult;
+      case 'formation': return (FORMATION_FIRE_COOLDOWN + Math.random() * 1.0) * p.fireCooldownMult;
+      default: return (3.0 + Math.random() * 2.0) * p.fireCooldownMult;
     }
   }
 

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "free_captains",
+    "name": "Free Captains",
+    "combatProfile": "Opportunistic skirmishers with high mobility and flank pressure.",
+    "economicProfile": "Flexible contraband deals and discounted crew hires.",
+    "narrativeVoice": "Boastful, personal, and loyalty-driven.",
+    "spawnWeight": 1.0,
+    "startingReputation": 0
+  },
+  {
+    "id": "imperial_navy",
+    "name": "Imperial Navy",
+    "combatProfile": "Formation discipline, armor, and area denial.",
+    "economicProfile": "Taxes, sanctions, and strict inspections.",
+    "narrativeVoice": "Authoritarian and procedural.",
+    "spawnWeight": 1.1,
+    "startingReputation": -10
+  },
+  {
+    "id": "redwake_corsairs",
+    "name": "Redwake Corsairs",
+    "combatProfile": "Aggressive fire attacks and boarding swarms.",
+    "economicProfile": "High-risk black market and bounty payouts.",
+    "narrativeVoice": "Violent, swaggering, and theatrical.",
+    "spawnWeight": 1.0,
+    "startingReputation": -5
+  },
+  {
+    "id": "wraith_fleet",
+    "name": "Wraith Fleet",
+    "combatProfile": "Phase tactics, morale pressure, and curse effects.",
+    "economicProfile": "Cursed relic exchanges and volatile bargains.",
+    "narrativeVoice": "Ominous, prophetic, and detached.",
+    "spawnWeight": 0.8,
+    "startingReputation": -20
+  },
+  {
+    "id": "merchant_consortium",
+    "name": "Merchant Consortium",
+    "combatProfile": "Minimal direct combat, escort-heavy protection.",
+    "economicProfile": "Contracts, logistics, and stable payouts.",
+    "narrativeVoice": "Pragmatic and transactional.",
+    "spawnWeight": 0.9,
+    "startingReputation": 5
+  }
+]

@@ -1,0 +1,200 @@
+[
+  {
+    "id": "burning_armada",
+    "name": "Burning Armada",
+    "tier": "region",
+    "region": "ember_shoals",
+    "factions": ["redwake_corsairs"],
+    "trigger": "enter_combat_node",
+    "payload": "spawn_fire_wave",
+    "rarity": 0.25,
+    "cooldownSec": 90
+  },
+  {
+    "id": "smuggler_convoy",
+    "name": "Smuggler Convoy",
+    "tier": "region",
+    "region": "ember_shoals",
+    "factions": ["merchant_consortium", "redwake_corsairs"],
+    "trigger": "enter_event_node",
+    "payload": "contraband_manifest_choice",
+    "rarity": 0.22,
+    "cooldownSec": 105
+  },
+  {
+    "id": "corsair_blood_oath",
+    "name": "Corsair Blood Oath",
+    "tier": "faction",
+    "region": "ember_shoals",
+    "factions": ["redwake_corsairs"],
+    "trigger": "enter_combat_node",
+    "payload": "corsair_blood_oath_choice",
+    "rarity": 0.15,
+    "cooldownSec": 130
+  },
+  {
+    "id": "manifest_inspection",
+    "name": "Manifest Inspection",
+    "tier": "faction",
+    "region": "ember_shoals",
+    "factions": ["merchant_consortium"],
+    "trigger": "followup:smuggler_convoy:forge_manifest",
+    "payload": "manifest_inspection_followup",
+    "rarity": 0.72,
+    "cooldownSec": 180
+  },
+  {
+    "id": "corsair_retribution",
+    "name": "Corsair Retribution",
+    "tier": "faction",
+    "region": "ember_shoals",
+    "factions": ["redwake_corsairs"],
+    "trigger": "followup:smuggler_convoy:burn_ledgers",
+    "payload": "corsair_retribution_followup",
+    "rarity": 0.7,
+    "cooldownSec": 180
+  },
+  {
+    "id": "toll_of_the_dead",
+    "name": "Toll of the Dead",
+    "tier": "region",
+    "region": "mourning_expanse",
+    "factions": ["wraith_fleet"],
+    "trigger": "enter_event_node",
+    "payload": "morale_tax_choice",
+    "rarity": 0.2,
+    "cooldownSec": 120
+  },
+  {
+    "id": "phantom_ambush",
+    "name": "Phantom Ambush",
+    "tier": "region",
+    "region": "mourning_expanse",
+    "factions": ["wraith_fleet"],
+    "trigger": "enter_combat_node",
+    "payload": "ghost_lantern_choice",
+    "rarity": 0.22,
+    "cooldownSec": 110
+  },
+  {
+    "id": "phantom_tithe",
+    "name": "Phantom Tithe",
+    "tier": "faction",
+    "region": "mourning_expanse",
+    "factions": ["wraith_fleet"],
+    "trigger": "followup:toll_of_the_dead:run_blockade",
+    "payload": "phantom_tithe_followup",
+    "rarity": 0.68,
+    "cooldownSec": 200
+  },
+  {
+    "id": "mutiny_whispers",
+    "name": "Mutiny Whispers",
+    "tier": "crew",
+    "region": "mourning_expanse",
+    "factions": ["wraith_fleet", "free_captains"],
+    "trigger": "high_infamy",
+    "payload": "mutiny_whispers_choice",
+    "rarity": 0.1,
+    "cooldownSec": 180
+  },
+  {
+    "id": "mutiny_trial",
+    "name": "Mutiny Trial",
+    "tier": "crew",
+    "region": "mourning_expanse",
+    "factions": ["free_captains"],
+    "trigger": "followup:mutiny_whispers:crack_down",
+    "payload": "mutiny_trial_followup",
+    "rarity": 0.64,
+    "cooldownSec": 210
+  },
+  {
+    "id": "flagship_interdiction",
+    "name": "Flagship Interdiction",
+    "tier": "faction",
+    "region": "crownwater_reach",
+    "factions": ["imperial_navy"],
+    "trigger": "high_infamy",
+    "payload": "boss_hunter_spawn",
+    "rarity": 0.12,
+    "cooldownSec": 180
+  },
+  {
+    "id": "tax_levy",
+    "name": "Tax Levy",
+    "tier": "region",
+    "region": "crownwater_reach",
+    "factions": ["imperial_navy", "merchant_consortium"],
+    "trigger": "enter_event_node",
+    "payload": "imperial_tax_choice",
+    "rarity": 0.2,
+    "cooldownSec": 120
+  },
+  {
+    "id": "blockade_grid",
+    "name": "Blockade Grid",
+    "tier": "faction",
+    "region": "crownwater_reach",
+    "factions": ["imperial_navy"],
+    "trigger": "enter_combat_node",
+    "payload": "blockade_grid_choice",
+    "rarity": 0.17,
+    "cooldownSec": 140
+  },
+  {
+    "id": "idol_of_the_deep",
+    "name": "Idol of the Deep",
+    "tier": "region",
+    "region": "verdant_mael",
+    "factions": ["free_captains"],
+    "trigger": "enter_event_node",
+    "payload": "relic_or_risk_choice",
+    "rarity": 0.18,
+    "cooldownSec": 120
+  },
+  {
+    "id": "jungle_relic",
+    "name": "Jungle Relic",
+    "tier": "region",
+    "region": "verdant_mael",
+    "factions": ["free_captains", "merchant_consortium"],
+    "trigger": "enter_combat_node",
+    "payload": "jungle_relic_choice",
+    "rarity": 0.2,
+    "cooldownSec": 115
+  },
+  {
+    "id": "relic_hunters",
+    "name": "Relic Hunters",
+    "tier": "faction",
+    "region": "verdant_mael",
+    "factions": ["free_captains", "merchant_consortium"],
+    "trigger": "followup:idol_of_the_deep:land_party",
+    "payload": "relic_hunters_followup",
+    "rarity": 0.66,
+    "cooldownSec": 190
+  },
+  {
+    "id": "leviathan_hunt",
+    "name": "Leviathan Hunt",
+    "tier": "global",
+    "region": "leviathan_deep",
+    "factions": ["wraith_fleet", "imperial_navy"],
+    "trigger": "act_finale",
+    "payload": "elite_monster_encounter",
+    "rarity": 0.08,
+    "cooldownSec": 240
+  },
+  {
+    "id": "deep_pressure",
+    "name": "Deep Pressure",
+    "tier": "region",
+    "region": "leviathan_deep",
+    "factions": ["wraith_fleet", "imperial_navy"],
+    "trigger": "enter_event_node",
+    "payload": "abyss_pressure_choice",
+    "rarity": 0.18,
+    "cooldownSec": 130
+  }
+]

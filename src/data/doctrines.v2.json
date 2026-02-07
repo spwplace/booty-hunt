@@ -1,0 +1,32 @@
+[
+  {
+    "id": "storm_lancer",
+    "name": "Storm Lancer",
+    "summary": "Aggressive speed doctrine with high-risk broadside windows.",
+    "startingBonuses": {
+      "speedMult": 1.1,
+      "cannonDamageMult": 1.05,
+      "maxHealthMult": 0.95
+    }
+  },
+  {
+    "id": "iron_bastion",
+    "name": "Iron Bastion",
+    "summary": "Defensive doctrine focused on armor and survival economy.",
+    "startingBonuses": {
+      "speedMult": 0.95,
+      "cannonDamageMult": 1.0,
+      "maxHealthMult": 1.15
+    }
+  },
+  {
+    "id": "phantom_privateer",
+    "name": "Phantom Privateer",
+    "summary": "Evasion and morale pressure with volatile upside.",
+    "startingBonuses": {
+      "speedMult": 1.05,
+      "cannonDamageMult": 1.08,
+      "maxHealthMult": 0.9
+    }
+  }
+]

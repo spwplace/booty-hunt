@@ -11,6 +11,7 @@ export interface DevPanelCallbacks {
   onToggleInstakill: (enabled: boolean) => void;
   onSpawnEnemy: (type: EnemyType, isBoss: boolean) => void;
   onSetWeather: (state: WeatherState) => void;
+  onExportTelemetry: () => string;
   getState: () => DevPanelState;
 }
 
@@ -51,6 +52,7 @@ export class DevPanel {
   private godModeCheckbox!: HTMLInputElement;
   private instakillCheckbox!: HTMLInputElement;
   private waveLabel!: HTMLSpanElement;
+  private telemetryHint!: HTMLDivElement;
 
   constructor(callbacks: DevPanelCallbacks) {
     this.callbacks = callbacks;
@@ -238,6 +240,20 @@ export class DevPanel {
     }
     weatherSection.appendChild(weatherRow);
     this.container.appendChild(weatherSection);
+
+    // Telemetry section
+    const telemetrySection = this.createSection('Telemetry');
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = 'Export Run Snapshot';
+    exportBtn.style.cssText = 'background:#2a3f6f;color:#d6e9ff;border:1px solid #5c8bc8;padding:5px 8px;cursor:pointer;font-family:monospace;font-size:11px;width:100%;border-radius:3px;';
+    exportBtn.onclick = () => {
+      this.telemetryHint.textContent = this.callbacks.onExportTelemetry();
+    };
+    this.telemetryHint = document.createElement('div');
+    this.telemetryHint.style.cssText = 'margin-top:6px;color:rgba(180,220,255,0.8);font-size:10px;line-height:1.4;';
+    this.telemetryHint.textContent = 'Exports JSON with counters and raw events.';
+    telemetrySection.append(exportBtn, this.telemetryHint);
+    this.container.appendChild(telemetrySection);
 
     // Hint
     const hint = document.createElement('div');

@@ -10,6 +10,7 @@ import {
   GhostShipEffect, FireShipExplosion, TreasureSparkle, VictoryConfetti,
 } from './Effects';
 import { UI } from './UI';
+import type { CodexViewModel, CodexSectionView, DoctrineSetupOption, ChoicePromptOption } from './UI';
 import { audio } from './Audio';
 import { CombatSystem } from './Combat';
 import { WeatherSystem } from './Weather';
@@ -21,12 +22,22 @@ import { SkySystem } from './Sky';
 import { PortScene } from './Port';
 import { WorldSystem } from './World';
 import { EnemyAISystem } from './EnemyAI';
+import type { EnemyAIPressureProfile } from './EnemyAI';
 import { CrewSystem } from './Crew';
 import { EventSystem } from './Events';
 import { TutorialSystem } from './Tutorial';
-import type { MerchantV1, WaveConfigV1, EnemyType, RunStats, EventType } from './Types';
-import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS } from './Types';
+import type { MerchantV1, WaveConfigV1, EnemyType, RunStats, EventType, IslandType } from './Types';
+import type { ShipClass, ShipClassConfig } from './Types';
+import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS, SHIP_CLASS_CONFIGS } from './Types';
 import { DevPanel } from './DevPanel';
+import { V2ContentRegistry } from './V2Content';
+import type { V2Doctrine, V2EventCard } from './V2Content';
+import { NarrativeSystem } from './NarrativeSystem';
+import { MapNodeSystem } from './MapNodeSystem';
+import type { MapNodeType } from './MapNodeSystem';
+import { FactionSystem } from './FactionSystem';
+import { EconomySystem } from './EconomySystem';
+import { TelemetrySystem } from './TelemetrySystem';
 
 // ===================================================================
 //  Mobile detection
@@ -160,6 +171,14 @@ const world = new WorldSystem(scene);
 const crew = new CrewSystem();
 const events = new EventSystem();
 const tutorial = new TutorialSystem();
+const v2Content = V2ContentRegistry.createDefault();
+const narrative = new NarrativeSystem((line) => {
+  ui.showCaptainLog(line.text, line.tone);
+});
+const mapNodes = new MapNodeSystem(v2Content);
+const factions = new FactionSystem(v2Content);
+const economy = new EconomySystem();
+const telemetry = new TelemetrySystem();
 
 // Wire weather system to scene targets
 weather.setTargets({
@@ -225,6 +244,56 @@ const WEATHER_LOG_LINES: Record<WeatherState, string> = {
   night: 'moonlit currents and lantern-lit wakes',
 };
 
+const FACTION_ENEMY_BIAS: Record<string, EnemyType[]> = {
+  free_captains: ['merchant_sloop', 'escort_frigate', 'fire_ship'],
+  imperial_navy: ['escort_frigate', 'navy_warship'],
+  redwake_corsairs: ['fire_ship', 'escort_frigate', 'merchant_sloop'],
+  wraith_fleet: ['ghost_ship', 'escort_frigate'],
+  merchant_consortium: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],
+};
+
+const FACTION_PRESSURE_PROFILES: Record<string, EnemyAIPressureProfile> = {
+  free_captains: {
+    speedMult: 1.06,
+    turnRateMult: 1.08,
+    fireCooldownMult: 0.95,
+    fireRangeMult: 1.0,
+    broadsideArcMult: 1.0,
+    engageRangeMult: 1.05,
+  },
+  imperial_navy: {
+    speedMult: 0.96,
+    turnRateMult: 1.02,
+    fireCooldownMult: 1.08,
+    fireRangeMult: 1.14,
+    broadsideArcMult: 1.18,
+    engageRangeMult: 1.18,
+  },
+  redwake_corsairs: {
+    speedMult: 1.12,
+    turnRateMult: 1.12,
+    fireCooldownMult: 0.9,
+    fireRangeMult: 0.95,
+    beelineExplodeRangeMult: 1.25,
+    engageRangeMult: 1.08,
+  },
+  wraith_fleet: {
+    speedMult: 1.02,
+    turnRateMult: 1.1,
+    fireCooldownMult: 0.92,
+    fireRangeMult: 1.08,
+    ghostPhaseIntervalMult: 0.82,
+    engageRangeMult: 1.12,
+  },
+  merchant_consortium: {
+    speedMult: 0.98,
+    turnRateMult: 0.95,
+    fireCooldownMult: 1.12,
+    fireRangeMult: 0.94,
+    fleeUrgencyMult: 1.2,
+  },
+};
+
 const EVENT_START_LOG: Record<EventType, { message: string; tone: 'warning' | 'mystic' | 'neutral' | 'reward' }> = {
   kraken: { message: 'The sea is boiling. Kraken limbs off both beams!', tone: 'warning' },
   whirlpool: { message: 'A spinning maw forms ahead. Helm hard over.', tone: 'warning' },
@@ -267,6 +336,33 @@ const EVENT_END_LOG: Record<EventType, { success: string; failure?: string; succ
   },
 };
 
+const CODEX_EVENT_TYPES: EventType[] = [
+  'kraken',
+  'whirlpool',
+  'ghost_ship_event',
+  'sea_serpent',
+  'storm_surge',
+  'treasure_map',
+];
+
+const CODEX_EVENT_NAMES: Record<EventType, string> = {
+  kraken: 'Kraken',
+  whirlpool: 'Whirlpool',
+  ghost_ship_event: 'Ghost Ship',
+  sea_serpent: 'Sea Serpent',
+  storm_surge: 'Storm Surge',
+  treasure_map: 'Treasure Map',
+};
+
+const CODEX_LANDMARK_TYPES: IslandType[] = ['rocky', 'sandy', 'jungle', 'fortress'];
+
+const CODEX_LANDMARK_DETAILS: Record<IslandType, string> = {
+  rocky: 'Jagged stone outcrops with narrow channels and hidden shoals.',
+  sandy: 'Low-lying cays and bright shoals favored by smugglers.',
+  jungle: 'Dense canopy islands with buried relic sites and serpent nests.',
+  fortress: 'Fortified strongholds with batteries guarding key sea lanes.',
+};
+
 function getWaveLogLine(config: WaveConfigV1): string {
   const weatherLine = WEATHER_LOG_LINES[config.weather];
   if (config.bossName) {
@@ -275,31 +371,1600 @@ function getWaveLogLine(config: WaveConfigV1): string {
   return `Wave ${config.wave}: ${weatherLine}. ${config.totalShips} ships on the horizon.`;
 }
 
+function toWeatherState(value: string): WeatherState | null {
+  if (value === 'clear' || value === 'foggy' || value === 'stormy' || value === 'night') return value;
+  return null;
+}
+
+function getDominantFactionId(regionFactionIds: string[]): string | null {
+  const spawnWeights = factions.getSpawnWeightMap(regionFactionIds);
+  let dominantFactionId: string | null = null;
+  let dominantWeight = -Infinity;
+  for (const [id, weight] of spawnWeights) {
+    if (weight > dominantWeight) {
+      dominantWeight = weight;
+      dominantFactionId = id;
+    }
+  }
+  return dominantFactionId;
+}
+
+function applyFactionPressureProfileForRegion(regionFactionIds: string[]): string | null {
+  const dominantFactionId = getDominantFactionId(regionFactionIds);
+  if (!dominantFactionId) {
+    EnemyAISystem.resetPressureProfile();
+    return null;
+  }
+  const profile = FACTION_PRESSURE_PROFILES[dominantFactionId];
+  if (profile) EnemyAISystem.setPressureProfile(profile);
+  else EnemyAISystem.resetPressureProfile();
+  return dominantFactionId;
+}
+
+function formatCodexLabel(raw: string): string {
+  return raw
+    .split('_')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatDoctrineBonusLabel(doctrine: V2Doctrine): string {
+  const speedPct = Math.round((doctrine.startingBonuses.speedMult - 1) * 100);
+  const damagePct = Math.round((doctrine.startingBonuses.cannonDamageMult - 1) * 100);
+  const healthPct = Math.round((doctrine.startingBonuses.maxHealthMult - 1) * 100);
+  const sign = (n: number) => (n >= 0 ? `+${n}%` : `${n}%`);
+  return `Speed ${sign(speedPct)} · Damage ${sign(damagePct)} · Hull ${sign(healthPct)}`;
+}
+
+function getDoctrineById(doctrineId: string): V2Doctrine | null {
+  const found = v2Content.data.doctrines.find((doctrine) => doctrine.id === doctrineId);
+  if (found) return found;
+  return v2Content.data.doctrines[0] ?? null;
+}
+
+function getRunSetupDoctrineOptions(): DoctrineSetupOption[] {
+  return v2Content.data.doctrines.map((doctrine) => ({
+    id: doctrine.id,
+    name: doctrine.name,
+    summary: doctrine.summary,
+    bonusLabel: formatDoctrineBonusLabel(doctrine),
+  }));
+}
+
+function getRunSetupShipConfigs(): ShipClassConfig[] {
+  const meta = progression.getMetaStatsV1();
+  return (Object.values(SHIP_CLASS_CONFIGS) as ShipClassConfig[]).map((config) => {
+    if (config.id !== 'galleon') {
+      return { ...config, locked: false };
+    }
+    return { ...config, locked: !meta.galleonUnlocked };
+  });
+}
+
+function buildCodexSection(
+  title: string,
+  defs: Array<{ id: string; name: string; detail: string }>,
+  unlocked: Set<string>,
+): CodexSectionView {
+  const entries = defs.map((def) => ({
+    id: def.id,
+    name: def.name,
+    detail: def.detail,
+    unlocked: unlocked.has(def.id),
+  }));
+  const discovered = entries.filter(entry => entry.unlocked).length;
+  return {
+    title,
+    discovered,
+    total: entries.length,
+    entries,
+  };
+}
+
+function buildCodexViewModel(): CodexViewModel {
+  const unlocked = new Set(progression.getCodexEntries());
+
+  const regionDefs = v2Content.data.regions.map(region => ({
+    id: `region:${region.id}`,
+    name: region.name,
+    detail: region.theme,
+  }));
+
+  const factionDefs = v2Content.data.factions.map(faction => ({
+    id: `faction:${faction.id}`,
+    name: faction.name,
+    detail: faction.combatProfile,
+  }));
+
+  const enemyDefs = (Object.keys(ENEMY_TYPE_CONFIGS) as EnemyType[]).map((enemyType) => {
+    const cfg = ENEMY_TYPE_CONFIGS[enemyType];
+    const behaviorLabel = formatCodexLabel(cfg.behavior);
+    const arms = cfg.armed ? 'Armed broadside threat.' : 'Primarily capture target.';
+    return {
+      id: `enemy:${enemyType}`,
+      name: formatCodexLabel(enemyType),
+      detail: `${behaviorLabel} pattern. Hull integrity ${cfg.hp}. ${arms}`,
+    };
+  });
+
+  const eventDefs = CODEX_EVENT_TYPES.map(eventType => ({
+    id: `event:${eventType}`,
+    name: CODEX_EVENT_NAMES[eventType],
+    detail: EVENT_START_LOG[eventType].message,
+  }));
+
+  const landmarkDefs = CODEX_LANDMARK_TYPES.map((landmarkType) => ({
+    id: `landmark:${landmarkType}`,
+    name: `${formatCodexLabel(landmarkType)} Isles`,
+    detail: CODEX_LANDMARK_DETAILS[landmarkType],
+  }));
+
+  const sections = [
+    buildCodexSection('Regions', regionDefs, unlocked),
+    buildCodexSection('Factions', factionDefs, unlocked),
+    buildCodexSection('Enemies', enemyDefs, unlocked),
+    buildCodexSection('Events', eventDefs, unlocked),
+    buildCodexSection('Landmarks', landmarkDefs, unlocked),
+  ];
+
+  const discovered = sections.reduce((sum, section) => sum + section.discovered, 0);
+  const total = sections.reduce((sum, section) => sum + section.total, 0);
+  const completionPct = total > 0 ? Math.round((discovered / total) * 100) : 0;
+
+  return {
+    completionPct,
+    discovered,
+    total,
+    sections,
+  };
+}
+
+function unlockCodexEntry(entryId: string, label: string): void {
+  const unlocked = progression.unlockCodexEntry(entryId);
+  if (!unlocked) return;
+  narrative.queue(`Codex updated: ${label}.`, 'mystic');
+  ui.showCodexDiscoverySpotlight(label);
+  telemetry.track('codex_unlock', { entryId });
+}
+
+function unlockRegionCodex(regionId: string): void {
+  const region = v2Content.getRegion(regionId);
+  if (!region) return;
+  unlockCodexEntry(`region:${regionId}`, `Region: ${region.name}`);
+}
+
+function unlockFactionCodex(factionId: string): void {
+  const faction = v2Content.getFaction(factionId);
+  if (!faction) return;
+  unlockCodexEntry(`faction:${factionId}`, `Faction: ${faction.name}`);
+}
+
+function unlockEnemyCodex(enemyType: EnemyType): void {
+  unlockCodexEntry(`enemy:${enemyType}`, `Enemy: ${formatCodexLabel(enemyType)}`);
+}
+
+function unlockEventCodex(eventType: EventType): void {
+  unlockCodexEntry(`event:${eventType}`, `Event: ${formatCodexLabel(eventType)}`);
+}
+
+function applyRegionalFactionReputationDelta(delta: number, reason: string): void {
+  const region = mapNodes.getCurrentRegion();
+  if (!region) return;
+  const factionId = getDominantFactionId(region.factionPressure);
+  if (!factionId) return;
+  const score = factions.applyReputationDelta(factionId, delta);
+  queueFactionReputationFeedback(factionId, delta);
+  telemetry.track('faction_reputation', {
+    faction: factionId,
+    delta,
+    score,
+    reason,
+  });
+}
+
+interface RegionalFactionContext {
+  factionId: string | null;
+  factionName: string | null;
+  reputation: number;
+}
+
+interface PortMarketProfile {
+  context: RegionalFactionContext;
+  shopMultiplier: number;
+  repairMultiplier: number;
+  crewMultiplier: number;
+  tierMultiplier: { common: number; rare: number; legendary: number };
+  marketTitle: string;
+  marketNotes: string[];
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function toPctLabel(multiplier: number): string {
+  const delta = Math.round((multiplier - 1) * 100);
+  return `${delta >= 0 ? '+' : ''}${delta}%`;
+}
+
+function getRegionalFactionContext(): RegionalFactionContext {
+  const region = mapNodes.getCurrentRegion();
+  if (!region) return { factionId: null, factionName: null, reputation: 0 };
+  const factionId = getDominantFactionId(region.factionPressure);
+  if (!factionId) return { factionId: null, factionName: null, reputation: 0 };
+  return {
+    factionId,
+    factionName: v2Content.getFaction(factionId)?.name ?? null,
+    reputation: factions.getReputation(factionId),
+  };
+}
+
+function getPortMarketProfile(): PortMarketProfile {
+  const context = getRegionalFactionContext();
+  const rep = clamp(context.reputation, -100, 100);
+
+  let shopMultiplier = 1 - rep * 0.002;
+  let repairMultiplier = 1 - rep * 0.0016;
+  let crewMultiplier = 1 - rep * 0.0013;
+  const tierMultiplier = { common: 1, rare: 1, legendary: 1 };
+  const marketNotes: string[] = [];
+
+  switch (context.factionId) {
+    case 'merchant_consortium':
+      shopMultiplier *= 0.94;
+      repairMultiplier *= 0.9;
+      crewMultiplier *= 0.92;
+      tierMultiplier.rare *= 0.95;
+      marketNotes.push('Consortium quartermasters favor consistent trade ledgers.');
+      break;
+    case 'imperial_navy':
+      shopMultiplier *= 1.08;
+      repairMultiplier *= 1.12;
+      crewMultiplier *= 1.08;
+      tierMultiplier.rare *= 1.05;
+      tierMultiplier.legendary *= 1.05;
+      marketNotes.push('Imperial harbor taxes are active in this district.');
+      break;
+    case 'redwake_corsairs':
+      shopMultiplier *= 0.98;
+      repairMultiplier *= 1.06;
+      crewMultiplier *= 0.94;
+      tierMultiplier.common *= 0.92;
+      tierMultiplier.legendary *= 1.12;
+      marketNotes.push('Corsair brokers discount raiding tools, but premium guns cost extra.');
+      break;
+    case 'wraith_fleet':
+      shopMultiplier *= 1.02;
+      repairMultiplier *= 1.14;
+      crewMultiplier *= 1.04;
+      tierMultiplier.common *= 1.08;
+      tierMultiplier.legendary *= 0.9;
+      marketNotes.push('Wraith tariffs are volatile. Forbidden cargo trades cheaper.');
+      break;
+    case 'free_captains':
+      shopMultiplier *= 0.96;
+      repairMultiplier *= 0.97;
+      crewMultiplier *= 0.88;
+      marketNotes.push('Free captain enclaves reduce recruitment fees for known allies.');
+      break;
+  }
+
+  shopMultiplier = clamp(shopMultiplier, 0.72, 1.42);
+  repairMultiplier = clamp(repairMultiplier, 0.72, 1.42);
+  crewMultiplier = clamp(crewMultiplier, 0.72, 1.42);
+  tierMultiplier.common = clamp(tierMultiplier.common, 0.8, 1.25);
+  tierMultiplier.rare = clamp(tierMultiplier.rare, 0.8, 1.25);
+  tierMultiplier.legendary = clamp(tierMultiplier.legendary, 0.8, 1.25);
+
+  if (context.factionName) {
+    marketNotes.push(
+      `${context.factionName} influence: shop ${toPctLabel(shopMultiplier)}, repair ${toPctLabel(repairMultiplier)}, crew ${toPctLabel(crewMultiplier)}.`,
+    );
+  } else {
+    marketNotes.push('Neutral port authority keeps prices stable.');
+  }
+
+  return {
+    context,
+    shopMultiplier,
+    repairMultiplier,
+    crewMultiplier,
+    tierMultiplier,
+    marketTitle: context.factionName ? `${context.factionName} Exchange` : 'Neutral Harbor Exchange',
+    marketNotes,
+  };
+}
+
+function getRegionalEventPressureMultiplier(): number {
+  const context = getRegionalFactionContext();
+  const rep = clamp(context.reputation, -120, 120);
+  let multiplier = 1 + (-rep / 240);
+
+  switch (context.factionId) {
+    case 'wraith_fleet':
+    case 'redwake_corsairs':
+      multiplier += 0.06;
+      break;
+    case 'merchant_consortium':
+      multiplier -= 0.05;
+      break;
+    case 'imperial_navy':
+      multiplier += 0.03;
+      break;
+  }
+
+  return clamp(multiplier, 0.65, 1.55);
+}
+
+function applyFactionReputationDelta(factionId: string | null, delta: number, reason: string): void {
+  if (!factionId) {
+    applyRegionalFactionReputationDelta(delta, reason);
+    return;
+  }
+  const score = factions.applyReputationDelta(factionId, delta);
+  queueFactionReputationFeedback(factionId, delta);
+  telemetry.track('faction_reputation', {
+    faction: factionId,
+    delta,
+    score,
+    reason,
+  });
+}
+
+function getContractObjectiveProgress(objective: ActiveContractObjective): number {
+  switch (objective.contractType) {
+    case 'captures':
+      return capturesThisWave;
+    case 'armed_captures':
+      return armedCapturesThisWave;
+    case 'plunder_gold':
+      return waveCaptureGold;
+  }
+}
+
+function formatContractRewardLine(objective: ActiveContractObjective): string {
+  const parts: string[] = [];
+  if (objective.rewardSupplies > 0) parts.push(`+${objective.rewardSupplies} Supplies`);
+  if (objective.rewardIntel > 0) parts.push(`+${objective.rewardIntel} Intel`);
+  if (objective.rewardTokens > 0) parts.push(`+${objective.rewardTokens} Token${objective.rewardTokens > 1 ? 's' : ''}`);
+  if (objective.rewardGold > 0) parts.push(`+${objective.rewardGold} Gold`);
+  return parts.join(', ');
+}
+
+function formatContractPenaltyLine(objective: ActiveContractObjective): string {
+  const parts: string[] = [];
+  if (objective.penaltySupplies > 0) parts.push(`-${objective.penaltySupplies} Supplies`);
+  if (objective.penaltyIntel > 0) parts.push(`-${objective.penaltyIntel} Intel`);
+  return parts.join(', ');
+}
+
+function formatContractProgress(objective: ActiveContractObjective, progress: number): string {
+  if (objective.contractType === 'plunder_gold') {
+    return `${Math.round(progress).toLocaleString()} / ${objective.target.toLocaleString()} gold`;
+  }
+  return `${Math.round(progress)} / ${objective.target} ${objective.progressLabel}`;
+}
+
+function setupContractObjectiveForWave(
+  wave: number,
+  nodeType: MapNodeType | undefined,
+  dominantFactionId: string | null,
+): void {
+  if (nodeType !== 'contract') {
+    activeContractObjective = null;
+    return;
+  }
+
+  const factionName = dominantFactionId
+    ? (v2Content.getFaction(dominantFactionId)?.name ?? formatCodexLabel(dominantFactionId))
+    : 'Local Brokers';
+  const rep = dominantFactionId ? factions.getReputation(dominantFactionId) : 0;
+  let contractType: ActiveContractObjective['contractType'] = 'captures';
+  switch (dominantFactionId) {
+    case 'merchant_consortium':
+      contractType = 'plunder_gold';
+      break;
+    case 'imperial_navy':
+      contractType = 'armed_captures';
+      break;
+    case 'redwake_corsairs':
+      contractType = Math.random() < 0.5 ? 'captures' : 'plunder_gold';
+      break;
+    case 'wraith_fleet':
+      contractType = 'armed_captures';
+      break;
+    case 'free_captains':
+      contractType = Math.random() < 0.6 ? 'captures' : 'armed_captures';
+      break;
+    default:
+      contractType = 'captures';
+  }
+
+  let target = 0;
+  let progressLabel = '';
+  let targetLabel = '';
+
+  if (contractType === 'captures') {
+    target = 2 + (wave >= 3 ? 1 : 0) + (rep <= -25 ? 1 : 0) - (rep >= 35 ? 1 : 0);
+    target = clamp(target, 1, 5);
+    progressLabel = 'captures';
+    targetLabel = `${target} captures`;
+  } else if (contractType === 'armed_captures') {
+    target = 1 + (wave >= 2 ? 1 : 0) + (rep <= -20 ? 1 : 0) - (rep >= 40 ? 1 : 0);
+    target = clamp(target, 1, 4);
+    progressLabel = 'armed captures';
+    targetLabel = `${target} armed captures`;
+  } else {
+    target = 450 + wave * 160 + (rep <= -20 ? 220 : 0) - (rep >= 40 ? 120 : 0);
+    target = clamp(target, 350, 2200);
+    target = Math.round(target / 50) * 50;
+    progressLabel = 'plundered gold';
+    targetLabel = `${target} gold`;
+  }
+
+  let rewardSupplies = 0;
+  let rewardIntel = 1;
+  let rewardTokens = 0;
+  let rewardGold = 0;
+  let penaltySupplies = 1;
+  let penaltyIntel = 0;
+
+  switch (dominantFactionId) {
+    case 'merchant_consortium':
+      rewardSupplies = 2;
+      rewardIntel = 2;
+      break;
+    case 'imperial_navy':
+      rewardIntel = 2;
+      rewardTokens = 1;
+      penaltyIntel = 1;
+      break;
+    case 'redwake_corsairs':
+      rewardSupplies = 1;
+      rewardTokens = 1;
+      rewardGold = 120;
+      break;
+    case 'wraith_fleet':
+      rewardIntel = 1;
+      rewardTokens = 2;
+      rewardGold = 80;
+      penaltyIntel = 1;
+      break;
+    case 'free_captains':
+      rewardSupplies = 2;
+      rewardIntel = 1;
+      break;
+    default:
+      rewardSupplies = 1;
+      rewardIntel = 1;
+  }
+
+  if (contractType === 'plunder_gold') {
+    rewardGold += 120;
+  }
+  if (contractType === 'armed_captures') {
+    rewardTokens += 1;
+  }
+
+  activeContractObjective = {
+    wave,
+    factionId: dominantFactionId,
+    factionName,
+    contractType,
+    target,
+    rewardSupplies,
+    rewardIntel,
+    rewardTokens,
+    rewardGold,
+    penaltySupplies,
+    penaltyIntel,
+    progressLabel,
+    targetLabel,
+    announcedMidpoint: false,
+    announcedComplete: false,
+  };
+
+  const rewardLine = formatContractRewardLine(activeContractObjective);
+  ui.showCaptainLog(
+    `Contract terms from ${factionName}: ${targetLabel}. Reward: ${rewardLine}.`,
+    'neutral',
+  );
+  telemetry.track('contract_offer', {
+    wave,
+    faction: dominantFactionId ?? 'neutral',
+    rep: Math.round(rep),
+    type: contractType,
+    target,
+    rewardSupplies,
+    rewardIntel,
+    rewardTokens,
+    rewardGold,
+  });
+}
+
+function updateContractObjectiveTargetLabel(objective: ActiveContractObjective): void {
+  if (objective.contractType === 'plunder_gold') {
+    objective.target = Math.round(objective.target / 50) * 50;
+    objective.targetLabel = `${objective.target} gold`;
+    return;
+  }
+  objective.target = Math.round(objective.target);
+  objective.targetLabel = `${objective.target} ${objective.progressLabel}`;
+}
+
+async function resolveContractNegotiationChoice(objective: ActiveContractObjective | null): Promise<void> {
+  if (!objective || screensaverActive) return;
+
+  const options: ChoicePromptOption[] = [
+    {
+      id: 'aggressive',
+      label: 'Aggressive Terms',
+      detail: 'Higher quota and stronger payout. Reputation hit if you fail.',
+    },
+    {
+      id: 'balanced',
+      label: 'Balanced Terms',
+      detail: 'Standard contract terms and penalties.',
+    },
+    {
+      id: 'cautious',
+      label: 'Cautious Terms',
+      detail: 'Lower quota and lighter penalties, but reduced rewards.',
+    },
+  ];
+
+  const choice = await ui.showChoicePrompt(
+    `${objective.factionName} Contract`,
+    `Objective: ${objective.targetLabel}. Reward: ${formatContractRewardLine(objective)}. Penalty: ${formatContractPenaltyLine(objective) || 'None'}.`,
+    options,
+  );
+
+  switch (choice) {
+    case 'aggressive':
+      objective.target *= objective.contractType === 'plunder_gold' ? 1.25 : 1.35;
+      objective.rewardSupplies += 1;
+      objective.rewardIntel += 1;
+      objective.rewardTokens += 1;
+      if (objective.contractType === 'plunder_gold') objective.rewardGold += 120;
+      objective.penaltySupplies += 1;
+      if (objective.contractType !== 'captures') objective.penaltyIntel += 1;
+      break;
+    case 'cautious':
+      objective.target *= objective.contractType === 'plunder_gold' ? 0.74 : 0.7;
+      objective.rewardSupplies = Math.max(0, objective.rewardSupplies - 1);
+      objective.rewardIntel = Math.max(1, objective.rewardIntel - 1);
+      objective.rewardTokens = Math.max(0, objective.rewardTokens - 1);
+      objective.rewardGold = Math.max(0, Math.round(objective.rewardGold * 0.55));
+      objective.penaltySupplies = Math.max(0, objective.penaltySupplies - 1);
+      objective.penaltyIntel = Math.max(0, objective.penaltyIntel - 1);
+      break;
+    default:
+      break;
+  }
+
+  if (objective.contractType !== 'plunder_gold') {
+    objective.target = clamp(objective.target, 1, objective.contractType === 'armed_captures' ? 5 : 6);
+  } else {
+    objective.target = clamp(objective.target, 300, 2600);
+  }
+  updateContractObjectiveTargetLabel(objective);
+
+  ui.showCaptainLog(
+    `Contract terms confirmed (${choice || 'balanced'}): ${objective.targetLabel}. Reward ${formatContractRewardLine(objective)}.`,
+    'neutral',
+  );
+  telemetry.track('contract_negotiation', {
+    wave: objective.wave,
+    faction: objective.factionId ?? 'neutral',
+    choice: choice || 'balanced',
+    target: objective.target,
+    rewardSupplies: objective.rewardSupplies,
+    rewardIntel: objective.rewardIntel,
+    rewardTokens: objective.rewardTokens,
+    rewardGold: objective.rewardGold,
+    penaltySupplies: objective.penaltySupplies,
+    penaltyIntel: objective.penaltyIntel,
+  });
+}
+
+function resolveContractObjectiveOnWaveComplete(wave: number): void {
+  const objective = activeContractObjective;
+  if (!objective || objective.wave !== wave) return;
+
+  const progress = getContractObjectiveProgress(objective);
+  const success = progress >= objective.target;
+  if (success) {
+    if (objective.rewardSupplies > 0) economy.addSupplies(objective.rewardSupplies);
+    economy.addIntel(objective.rewardIntel);
+    if (objective.rewardTokens > 0) economy.addReputationTokens(objective.rewardTokens);
+    if (objective.rewardGold > 0) progression.addScore(objective.rewardGold);
+    applyFactionReputationDelta(objective.factionId, 0.9, 'contract_success');
+    ui.showCaptainLog(
+      `Contract fulfilled for ${objective.factionName}: ${formatContractRewardLine(objective)}.`,
+      'reward',
+    );
+  } else {
+    if (objective.penaltySupplies > 0) economy.addSupplies(-objective.penaltySupplies);
+    if (objective.penaltyIntel > 0) economy.addIntel(-objective.penaltyIntel);
+    applyFactionReputationDelta(objective.factionId, -1.1, 'contract_failure');
+    ui.showCaptainLog(
+      `Contract failed in ${objective.factionName} waters: ${formatContractPenaltyLine(objective)}.`,
+      'warning',
+    );
+  }
+
+  telemetry.track('contract_resolved', {
+    wave,
+    faction: objective.factionId ?? 'neutral',
+    type: objective.contractType,
+    success,
+    progress,
+    target: objective.target,
+  });
+  activeContractObjective = null;
+}
+
+function queueFactionReputationFeedback(factionId: string, delta: number): void {
+  if (Math.abs(delta) < 0.01) return;
+  const current = pendingFactionReputation.get(factionId) ?? 0;
+  pendingFactionReputation.set(factionId, current + delta);
+}
+
+function updateFactionFeedback(dt: number): void {
+  if (pendingFactionReputation.size === 0) return;
+  factionFeedbackTimer -= dt;
+  if (factionFeedbackTimer > 0) return;
+
+  let selectedFactionId: string | null = null;
+  let selectedDelta = 0;
+  for (const [factionId, delta] of pendingFactionReputation) {
+    if (!selectedFactionId || Math.abs(delta) > Math.abs(selectedDelta)) {
+      selectedFactionId = factionId;
+      selectedDelta = delta;
+    }
+  }
+  if (!selectedFactionId) return;
+
+  pendingFactionReputation.delete(selectedFactionId);
+  const factionName = v2Content.getFaction(selectedFactionId)?.name ?? formatCodexLabel(selectedFactionId);
+  const score = factions.getReputation(selectedFactionId);
+  const deltaLabel = `${selectedDelta >= 0 ? '+' : ''}${selectedDelta.toFixed(1)}`;
+  ui.showCaptainLog(
+    `Standing with ${factionName}: ${deltaLabel} (${Math.round(score)}).`,
+    selectedDelta >= 0 ? 'reward' : 'warning',
+  );
+  factionFeedbackTimer = 2.3;
+}
+
+function applyMapNodeToWaveConfig(base: WaveConfigV1): WaveConfigV1 {
+  const node = mapNodes.getCurrentNode();
+  if (!node) return base;
+
+  const config: WaveConfigV1 = {
+    ...base,
+    enemyTypes: [...base.enemyTypes],
+  };
+
+  const nodeRegion = v2Content.getRegion(node.regionId);
+  if (nodeRegion && nodeRegion.weatherBias.length > 0) {
+    const weather = toWeatherState(nodeRegion.weatherBias[config.wave % nodeRegion.weatherBias.length]);
+    if (weather) config.weather = weather;
+  }
+
+  switch (node.type) {
+    case 'event':
+      config.armedPercent = Math.min(0.9, config.armedPercent + 0.1);
+      break;
+    case 'contract':
+      config.speedMultiplier *= 1.08;
+      config.healthMultiplier *= 1.08;
+      break;
+    case 'port':
+      config.isPortWave = true;
+      break;
+    case 'boss':
+      if (!config.bossName) {
+        config.bossName = 'Dread Commodore';
+        config.bossHp = Math.max(config.bossHp, Math.round(280 * config.healthMultiplier));
+      }
+      if (!config.enemyTypes.includes('navy_warship')) config.enemyTypes.push('navy_warship');
+      break;
+  }
+
+  return config;
+}
+
 function announceEventStart(type: EventType): void {
   const entry = EVENT_START_LOG[type];
   if (!entry) return;
+  unlockEventCodex(type);
+  telemetry.track('event_start', { type });
+  narrative.queue(entry.message, entry.tone);
   ui.showCaptainLog(entry.message, entry.tone);
 }
 
 function announceEventEnd(type: EventType, success: boolean): void {
   const entry = EVENT_END_LOG[type];
   if (!entry) return;
+  telemetry.track('event_end', { type, success });
+  if (type !== 'treasure_map') {
+    applyRegionalFactionReputationDelta(success ? 0.3 : -0.25, success ? 'event_success' : 'event_failure');
+  }
   if (success) {
+    narrative.queue(entry.success, entry.successTone);
     ui.showCaptainLog(entry.success, entry.successTone);
     return;
   }
   if (entry.failure) {
+    narrative.queue(entry.failure, entry.failureTone ?? 'warning');
     ui.showCaptainLog(entry.failure, entry.failureTone ?? 'warning');
   }
+}
+
+function parseFollowupTrigger(trigger: string): { cardId: string; choice: string } | null {
+  if (!trigger.startsWith('followup:')) return null;
+  const parts = trigger.split(':');
+  if (parts.length < 3) return null;
+  const cardId = parts[1]?.trim();
+  const choice = parts.slice(2).join(':').trim();
+  if (!cardId || !choice) return null;
+  return { cardId, choice };
+}
+
+function makeFollowupChoiceKey(cardId: string, choice: string): string {
+  return `${cardId}:${choice}`;
+}
+
+function pruneFollowupChoices(currentWave: number): void {
+  for (const [key, expiresWave] of pendingFollowupChoices) {
+    if (expiresWave < currentWave) {
+      pendingFollowupChoices.delete(key);
+    }
+  }
+}
+
+function queueFollowupChoice(cardId: string, choice: string): void {
+  if (!choice || choice === 'none') return;
+  const currentWave = progression.getCurrentWave();
+  const key = makeFollowupChoiceKey(cardId, choice);
+  pendingFollowupChoices.set(key, currentWave + 2);
+}
+
+function hasFollowupTrigger(trigger: string, currentWave: number): boolean {
+  const parsed = parseFollowupTrigger(trigger);
+  if (!parsed) return false;
+  const key = makeFollowupChoiceKey(parsed.cardId, parsed.choice);
+  const expiresWave = pendingFollowupChoices.get(key);
+  return typeof expiresWave === 'number' && expiresWave >= currentWave;
+}
+
+function consumeFollowupTrigger(trigger: string): void {
+  const parsed = parseFollowupTrigger(trigger);
+  if (!parsed) return;
+  const key = makeFollowupChoiceKey(parsed.cardId, parsed.choice);
+  pendingFollowupChoices.delete(key);
+}
+
+function matchesV2EventCardTrigger(
+  card: V2EventCard,
+  nodeType: MapNodeType | undefined,
+  currentWave: number,
+): boolean {
+  const trigger = card.trigger;
+  if (trigger.startsWith('followup:')) {
+    return hasFollowupTrigger(trigger, currentWave);
+  }
+  if (trigger === 'enter_event_node') return nodeType === 'event';
+  if (trigger === 'enter_combat_node') return nodeType === 'combat' || nodeType === 'contract';
+  if (trigger === 'act_finale') return nodeType === 'boss';
+  if (trigger === 'high_infamy') return progression.getScore() >= 1200;
+  return false;
+}
+
+function pickV2EventCard(
+  nodeType: MapNodeType | undefined,
+  regionId: string | undefined,
+  dominantFactionId: string | null,
+): V2EventCard | null {
+  if (!regionId) return null;
+  const currentWave = progression.getCurrentWave();
+  pruneFollowupChoices(currentWave);
+  const nowSec = time;
+  const regionCfg = v2Content.getRegion(regionId);
+  const eventBias = new Set(regionCfg?.eventDeckBias ?? []);
+  const candidates = v2Content.data.events.filter((card) => {
+    if (card.region !== regionId) return false;
+    if (!matchesV2EventCardTrigger(card, nodeType, currentWave)) return false;
+    if (card.factions.length > 0 && dominantFactionId && !card.factions.includes(dominantFactionId)) return false;
+    const cooldownUntil = v2EventCardCooldowns.get(card.id) ?? 0;
+    if (cooldownUntil > nowSec) return false;
+    return true;
+  });
+  if (candidates.length === 0) return null;
+
+  const rolled = candidates.filter((card) => Math.random() < card.rarity);
+  const pool = rolled.length > 0 ? rolled : candidates;
+  const cardWeight = (card: V2EventCard) => card.rarity * (eventBias.has(card.id) ? 1.45 : 1);
+  const weightTotal = pool.reduce((sum, card) => sum + cardWeight(card), 0);
+  if (weightTotal <= 0) return null;
+  let roll = Math.random() * weightTotal;
+  for (const card of pool) {
+    roll -= cardWeight(card);
+    if (roll <= 0) {
+      consumeFollowupTrigger(card.trigger);
+      return card;
+    }
+  }
+  const fallback = pool[pool.length - 1] ?? null;
+  if (fallback) consumeFollowupTrigger(fallback.trigger);
+  return fallback;
+}
+
+async function applyV2EventCard(
+  card: V2EventCard,
+  config: WaveConfigV1,
+  dominantFactionId: string | null,
+): Promise<void> {
+  v2EventCardCooldowns.set(card.id, time + card.cooldownSec);
+  const crewRoles = new Set(crew.getCrew().map((member) => member.role));
+  const stats = progression.getPlayerStats();
+  const econState = () => economy.getState();
+  let logLine = '';
+  let tone: 'warning' | 'neutral' | 'reward' | 'mystic' = 'neutral';
+  let branch: 'success' | 'failure' | 'neutral' = 'neutral';
+  let choice = 'none';
+
+  switch (card.payload) {
+    case 'spawn_fire_wave':
+      config.armedPercent = clamp(config.armedPercent + 0.12, 0, 0.95);
+      if (!config.enemyTypes.includes('fire_ship')) config.enemyTypes.push('fire_ship');
+      logLine = 'Fire hulks sighted ahead. Corsair raiders primed the lane.';
+      tone = 'warning';
+      break;
+    case 'contraband_manifest_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Smuggler ledgers are aboard. Decide whether to forge papers or burn the books.',
+        [
+          {
+            id: 'forge_manifest',
+            label: 'Forge Manifest',
+            detail: 'Costs 1 Intel. Better supply gain and smoother relations if successful.',
+          },
+          {
+            id: 'burn_ledgers',
+            label: 'Burn The Ledgers',
+            detail: 'No Intel cost, but patrols tighten and reputation drops.',
+          },
+        ],
+      );
+      if (choice === 'forge_manifest') {
+        if (econState().intel >= 1) {
+          economy.addIntel(-1);
+          economy.addSupplies(2);
+          applyFactionReputationDelta(dominantFactionId, 0.25, 'v2_event_card_success');
+          logLine = 'False manifests accepted. +2 Supplies, -1 Intel.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.2, 'v2_event_card_failure');
+          logLine = 'No intel cache to forge from. Inspectors confiscated a crate.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        economy.addIntel(1);
+        config.armedPercent = clamp(config.armedPercent + 0.05, 0, 0.95);
+        applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+        logLine = 'Ledgers burned. +1 Intel but patrol guns are now on alert.';
+        tone = 'neutral';
+        branch = 'neutral';
+      }
+      break;
+    }
+    case 'corsair_blood_oath_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Redwake captains offer a blood oath before battle.',
+        [
+          {
+            id: 'take_oath',
+            label: 'Take The Oath',
+            detail: 'Faster attack tempo and token gain, but rougher combat conditions.',
+          },
+          {
+            id: 'decline_oath',
+            label: 'Keep Distance',
+            detail: 'Safer route and modest supplies, at reputation cost.',
+          },
+        ],
+      );
+      if (choice === 'take_oath') {
+        config.speedMultiplier *= 1.08;
+        config.armedPercent = clamp(config.armedPercent + 0.1, 0, 0.95);
+        economy.addReputationTokens(1);
+        applyFactionReputationDelta(dominantFactionId, 0.5, 'v2_event_card_success');
+        logLine = 'Oath accepted. Battle tempo rises and raiders fight harder. +1 Token.';
+        tone = 'mystic';
+        branch = 'success';
+      } else {
+        economy.addSupplies(1);
+        applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+        logLine = 'Oath declined. +1 Supplies, but corsair trust is reduced.';
+        tone = 'neutral';
+        branch = 'neutral';
+      }
+      break;
+    }
+    case 'morale_tax_choice': {
+      const hasQuartermaster = crewRoles.has('quartermaster');
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Harbormasters demand passage toll for this lane.',
+        [
+          {
+            id: 'pay_toll',
+            label: 'Pay The Toll',
+            detail: 'Spend 2 Supplies to keep passage calm and preserve standing.',
+          },
+          {
+            id: 'run_blockade',
+            label: 'Run The Blockade',
+            detail: 'No supply cost, but risks penalties unless your crew can outfox patrols.',
+          },
+        ],
+      );
+
+      if (choice === 'pay_toll') {
+        if (economy.spendSupplies(2)) {
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.45, 'v2_event_card_success');
+          logLine = 'Toll paid and route secured. -2 Supplies, +1 Intel.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+          logLine = 'Insufficient stores to pay full toll. Patrols seized a crate.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        const evasionStrength = (hasQuartermaster ? 1 : 0)
+          + (crewRoles.has('navigator') ? 1 : 0)
+          + (crewRoles.has('lookout') ? 1 : 0)
+          + (stats.maxSpeed >= 15 ? 1 : 0);
+        if (evasionStrength >= 2) {
+          economy.addIntel(2);
+          applyFactionReputationDelta(dominantFactionId, -0.1, 'v2_event_card_neutral');
+          logLine = 'Blockade slipped at nightfall. +2 Intel, only minor diplomatic heat.';
+          tone = 'neutral';
+          branch = 'neutral';
+        } else {
+          config.armedPercent = clamp(config.armedPercent + 0.08, 0, 0.95);
+          economy.addSupplies(-2);
+          applyFactionReputationDelta(dominantFactionId, -0.55, 'v2_event_card_failure');
+          logLine = 'Blockade run failed. -2 Supplies and heavier armed patrols.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'ghost_lantern_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Lantern lights flicker through the fog. Choose stealth or challenge.',
+        [
+          {
+            id: 'douse_lanterns',
+            label: 'Douse Lanterns',
+            detail: 'Safer if you have scouting crew, otherwise supplies may be lost.',
+          },
+          {
+            id: 'challenge_phantoms',
+            label: 'Challenge The Phantoms',
+            detail: 'Adds ghost threats but can earn tokens.',
+          },
+        ],
+      );
+      if (choice === 'douse_lanterns') {
+        if (crewRoles.has('lookout') || crewRoles.has('navigator')) {
+          config.armedPercent = clamp(config.armedPercent - 0.08, 0, 0.95);
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.2, 'v2_event_card_success');
+          logLine = 'Lanterns out. We slipped the phantom line. +1 Intel.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.25, 'v2_event_card_failure');
+          logLine = 'Course drifted in darkness. -1 Supplies.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        if (!config.enemyTypes.includes('ghost_ship')) config.enemyTypes.push('ghost_ship');
+        config.healthMultiplier *= 1.05;
+        economy.addReputationTokens(1);
+        applyFactionReputationDelta(dominantFactionId, 0.1, 'v2_event_card_neutral');
+        logLine = 'Phantoms challenged. Enemy hulls harden, but omens grant +1 Token.';
+        tone = 'mystic';
+        branch = 'neutral';
+      }
+      break;
+    }
+    case 'boss_hunter_spawn':
+      if (!config.enemyTypes.includes('navy_warship')) config.enemyTypes.push('navy_warship');
+      config.totalShips = Math.min(config.totalShips + 1, 14);
+      logLine = 'Imperial hunter squadron joins the patrol roster.';
+      tone = 'warning';
+      break;
+    case 'imperial_tax_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Imperial clerks board for an immediate tax audit.',
+        [
+          {
+            id: 'submit_audit',
+            label: 'Submit To Audit',
+            detail: 'Spend 1 Supplies for cleaner passage and better standing.',
+          },
+          {
+            id: 'bribe_clerks',
+            label: 'Bribe The Clerks',
+            detail: 'Costs 2 Intel if available; failure triggers harsher patrol response.',
+          },
+        ],
+      );
+      if (choice === 'submit_audit') {
+        if (economy.spendSupplies(1)) {
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.3, 'v2_event_card_success');
+          logLine = 'Audit cleared. -1 Supplies, +1 Intel.';
+          tone = 'neutral';
+          branch = 'success';
+        } else {
+          config.armedPercent = clamp(config.armedPercent + 0.05, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.2, 'v2_event_card_failure');
+          logLine = 'Manifest was short. Escorts now enforce tighter inspection.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        if (econState().intel >= 2) {
+          economy.addIntel(-2);
+          economy.addSupplies(2);
+          applyFactionReputationDelta(dominantFactionId, 0.1, 'v2_event_card_neutral');
+          logLine = 'Bribes accepted quietly. -2 Intel, +2 Supplies.';
+          tone = 'reward';
+          branch = 'neutral';
+        } else {
+          economy.addSupplies(-2);
+          config.armedPercent = clamp(config.armedPercent + 0.08, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.45, 'v2_event_card_failure');
+          logLine = 'Failed bribe attempt. -2 Supplies and heavier patrol response.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'blockade_grid_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'A mine-linked blockade closes the shortest route.',
+        [
+          {
+            id: 'cut_lane',
+            label: 'Cut Through Mine Lane',
+            detail: 'Fast route with higher payoff if you have speed/scouting.',
+          },
+          {
+            id: 'detour_route',
+            label: 'Take The Detour',
+            detail: 'Safer but longer engagement profile.',
+          },
+        ],
+      );
+      if (choice === 'cut_lane') {
+        if (crewRoles.has('navigator') || stats.maxSpeed >= 15) {
+          config.totalShips = Math.max(3, config.totalShips - 1);
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.15, 'v2_event_card_success');
+          logLine = 'Mine lane pierced cleanly. -1 ship in enemy roster, +1 Intel.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-2);
+          config.totalShips = Math.min(14, config.totalShips + 1);
+          config.armedPercent = clamp(config.armedPercent + 0.05, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.3, 'v2_event_card_failure');
+          logLine = 'Lane breach failed. -2 Supplies and reinforcements arrive.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        config.healthMultiplier *= 0.98;
+        config.speedMultiplier *= 0.97;
+        economy.addSupplies(1);
+        applyFactionReputationDelta(dominantFactionId, -0.05, 'v2_event_card_neutral');
+        logLine = 'Detour taken. +1 Supplies, but slower approach and longer exchanges.';
+        tone = 'neutral';
+        branch = 'neutral';
+      }
+      break;
+    }
+    case 'relic_or_risk_choice': {
+      const hasScoutCrew = crewRoles.has('lookout') || crewRoles.has('navigator');
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'A relic cache lies inland. Decide whether to commit a landing party.',
+        [
+          {
+            id: 'land_party',
+            label: 'Commit Landing Party',
+            detail: 'Potential big gain. Failure risks supply losses and an angrier sea lane.',
+          },
+          {
+            id: 'shadow_market',
+            label: 'Sell Coordinates',
+            detail: 'Take immediate Intel/Tokens but leave treasure behind.',
+          },
+        ],
+      );
+
+      if (choice === 'shadow_market') {
+        economy.addIntel(2);
+        economy.addReputationTokens(1);
+        applyFactionReputationDelta(dominantFactionId, 0.15, 'v2_event_card_neutral');
+        logLine = 'Coordinates sold through smugglers. +2 Intel, +1 Token.';
+        tone = 'neutral';
+        branch = 'neutral';
+      } else {
+        if (hasScoutCrew || stats.maxSpeed >= 15 || crewRoles.has('bosun')) {
+          economy.addSupplies(2);
+          economy.addIntel(2);
+          applyFactionReputationDelta(dominantFactionId, 0.35, 'v2_event_card_success');
+          logLine = 'Landing party returned with relic crates. +2 Supplies, +2 Intel.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          config.armedPercent = clamp(config.armedPercent + 0.08, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+          logLine = 'Rivals raided the beachhead first; escorts tighten patrol lines.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'jungle_relic_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'A jungle shrine is exposed by tidebreak.',
+        [
+          {
+            id: 'inland_raid',
+            label: 'Launch Inland Raid',
+            detail: 'Potentially large gain if your crew can secure the beachhead.',
+          },
+          {
+            id: 'hire_guides',
+            label: 'Hire Local Guides',
+            detail: 'Costs 1 Supplies but improves intel and diplomatic outcomes.',
+          },
+        ],
+      );
+      if (choice === 'hire_guides') {
+        if (economy.spendSupplies(1)) {
+          economy.addIntel(2);
+          applyFactionReputationDelta(dominantFactionId, 0.22, 'v2_event_card_success');
+          logLine = 'Guides hired. -1 Supplies, +2 Intel.';
+          tone = 'neutral';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.2, 'v2_event_card_failure');
+          logLine = 'Guide deal collapsed over payment. -1 Supplies in the scramble.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        if (crewRoles.has('bosun') || crewRoles.has('lookout') || stats.maxHealth >= 130) {
+          economy.addReputationTokens(1);
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.3, 'v2_event_card_success');
+          logLine = 'Shrine seized. +1 Token, +1 Intel.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-2);
+          config.armedPercent = clamp(config.armedPercent + 0.07, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.32, 'v2_event_card_failure');
+          logLine = 'Beachhead overrun. -2 Supplies and patrol lines harden.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'elite_monster_encounter':
+      config.specialEvent = config.specialEvent ?? 'sea_serpent';
+      config.healthMultiplier *= 1.08;
+      logLine = 'Leviathan signs churn below. The next clash will be brutal.';
+      tone = 'mystic';
+      break;
+    case 'abyss_pressure_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Depth gauges spike. Choose a route through abyssal pressure fronts.',
+        [
+          {
+            id: 'skim_surface',
+            label: 'Skim Surface Currents',
+            detail: 'Safer path with modest supplies gain.',
+          },
+          {
+            id: 'dive_signal',
+            label: 'Dive For Signal Echo',
+            detail: 'High risk but can yield intel and tokens if the crew holds.',
+          },
+        ],
+      );
+      if (choice === 'skim_surface') {
+        economy.addSupplies(1);
+        config.speedMultiplier *= 0.99;
+        applyFactionReputationDelta(dominantFactionId, -0.04, 'v2_event_card_neutral');
+        logLine = 'Surface route held. +1 Supplies with slight speed drag.';
+        tone = 'neutral';
+        branch = 'neutral';
+      } else {
+        if (crewRoles.has('surgeon') || crewRoles.has('bosun') || stats.maxHealth >= 130) {
+          economy.addIntel(2);
+          economy.addReputationTokens(2);
+          applyFactionReputationDelta(dominantFactionId, 0.25, 'v2_event_card_success');
+          logLine = 'Pressure dive survived. +2 Intel, +2 Tokens.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-2);
+          config.healthMultiplier *= 1.1;
+          config.specialEvent = config.specialEvent ?? 'whirlpool';
+          applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+          logLine = 'Dive failed. Hull strain rises and whirlpool signatures form.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'mutiny_whispers_choice': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Whispers spread through the lower deck after recent infamy spikes.',
+        [
+          {
+            id: 'share_spoils',
+            label: 'Share Extra Spoils',
+            detail: 'Costs 1 Supplies, improves morale and grants token leverage.',
+          },
+          {
+            id: 'crack_down',
+            label: 'Crack Down Hard',
+            detail: 'No cost, but unstable crews may trigger losses.',
+          },
+        ],
+      );
+      if (choice === 'share_spoils') {
+        if (economy.spendSupplies(1)) {
+          economy.addReputationTokens(1);
+          applyFactionReputationDelta(dominantFactionId, 0.2, 'v2_event_card_success');
+          logLine = 'Spoils distributed. -1 Supplies, +1 Token.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addIntel(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.15, 'v2_event_card_failure');
+          logLine = 'No supplies to distribute. Crew trust eroded.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        if (crew.getCrew().length >= 3 || crewRoles.has('bosun')) {
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.05, 'v2_event_card_neutral');
+          logLine = 'Discipline restored by veteran officers. +1 Intel.';
+          tone = 'neutral';
+          branch = 'neutral';
+        } else {
+          economy.addSupplies(-1);
+          config.totalShips = Math.min(14, config.totalShips + 1);
+          applyFactionReputationDelta(dominantFactionId, -0.25, 'v2_event_card_failure');
+          logLine = 'Harsh discipline backfired. -1 Supplies and enemy scouts close in.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'manifest_inspection_followup': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Consortium auditors demand proof for those forged manifests.',
+        [
+          {
+            id: 'submit_docs',
+            label: 'Submit Clean Documents',
+            detail: 'Spend 1 Intel to keep consortium routes open.',
+          },
+          {
+            id: 'scuttle_evidence',
+            label: 'Scuttle Evidence',
+            detail: 'No Intel cost, but patrol pressure rises.',
+          },
+        ],
+      );
+      if (choice === 'submit_docs') {
+        if (econState().intel >= 1) {
+          economy.addIntel(-1);
+          economy.addSupplies(1);
+          config.armedPercent = clamp(config.armedPercent - 0.04, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, 0.25, 'v2_event_card_success');
+          logLine = 'Audit passed. -1 Intel, +1 Supplies and reduced patrol pressure.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.3, 'v2_event_card_failure');
+          logLine = 'No supporting intel cache. Auditors seized cargo manifests.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        economy.addIntel(1);
+        config.armedPercent = clamp(config.armedPercent + 0.06, 0, 0.95);
+        applyFactionReputationDelta(dominantFactionId, -0.28, 'v2_event_card_failure');
+        logLine = 'Evidence burned. +1 Intel, but escorts now run hot inspections.';
+        tone = 'neutral';
+        branch = 'neutral';
+      }
+      break;
+    }
+    case 'corsair_retribution_followup': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Redwake captains answer the burned-ledger insult with a tribute demand.',
+        [
+          {
+            id: 'pay_blood_price',
+            label: 'Pay Blood Price',
+            detail: 'Spend 2 Supplies to avoid escalation and gain limited goodwill.',
+          },
+          {
+            id: 'stand_and_fight',
+            label: 'Stand And Fight',
+            detail: 'No supply cost, but heavier combat and volatile outcomes.',
+          },
+        ],
+      );
+      if (choice === 'pay_blood_price') {
+        if (economy.spendSupplies(2)) {
+          economy.addReputationTokens(1);
+          applyFactionReputationDelta(dominantFactionId, 0.18, 'v2_event_card_neutral');
+          logLine = 'Tribute paid. -2 Supplies, +1 Token and open passage.';
+          tone = 'neutral';
+          branch = 'neutral';
+        } else {
+          config.armedPercent = clamp(config.armedPercent + 0.1, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+          logLine = 'Could not pay tribute. Corsair retaliation escalates immediately.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        if (!config.enemyTypes.includes('fire_ship')) config.enemyTypes.push('fire_ship');
+        config.speedMultiplier *= 1.04;
+        config.armedPercent = clamp(config.armedPercent + 0.08, 0, 0.95);
+        const disciplinedCrew = crewRoles.has('bosun') || crewRoles.has('gunner');
+        applyFactionReputationDelta(dominantFactionId, disciplinedCrew ? 0.12 : -0.2, disciplinedCrew ? 'v2_event_card_success' : 'v2_event_card_failure');
+        logLine = disciplinedCrew
+          ? 'Battle stations held. Corsairs respect the stand, but combat heats up.'
+          : 'Stand was chaotic. Retaliation hardens corsair aggression this wave.';
+        tone = disciplinedCrew ? 'mystic' : 'warning';
+        branch = disciplinedCrew ? 'success' : 'failure';
+      }
+      break;
+    }
+    case 'phantom_tithe_followup': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'The dead return for unpaid passage. They demand a spectral tithe.',
+        [
+          {
+            id: 'offer_tokens',
+            label: 'Offer Reputation Tokens',
+            detail: 'Spend 1 Token to avoid a direct haunting strike.',
+          },
+          {
+            id: 'deny_tithe',
+            label: 'Deny The Tithe',
+            detail: 'Refuse payment. High chance of an immediate ghost event.',
+          },
+        ],
+      );
+      if (choice === 'offer_tokens') {
+        if (econState().reputationTokens >= 1) {
+          economy.addReputationTokens(-1);
+          economy.addIntel(1);
+          applyFactionReputationDelta(dominantFactionId, 0.08, 'v2_event_card_neutral');
+          logLine = 'Tithe accepted by the dead. -1 Token, +1 Intel.';
+          tone = 'neutral';
+          branch = 'neutral';
+        } else {
+          config.specialEvent = config.specialEvent ?? 'ghost_ship_event';
+          config.healthMultiplier *= 1.06;
+          applyFactionReputationDelta(dominantFactionId, -0.28, 'v2_event_card_failure');
+          logLine = 'No token tribute available. The dead mark our wake.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        config.specialEvent = config.specialEvent ?? 'ghost_ship_event';
+        config.armedPercent = clamp(config.armedPercent + 0.06, 0, 0.95);
+        applyFactionReputationDelta(dominantFactionId, -0.35, 'v2_event_card_failure');
+        logLine = 'Tithe denied. A ghost escort is now hunting this route.';
+        tone = 'mystic';
+        branch = 'failure';
+      }
+      break;
+    }
+    case 'mutiny_trial_followup': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'After the crackdown, the crew demands a final judgment at sea.',
+        [
+          {
+            id: 'pardon_ringleader',
+            label: 'Pardon Ringleader',
+            detail: 'Spend 1 Supplies to stabilize morale and gain intel.',
+          },
+          {
+            id: 'make_example',
+            label: 'Make An Example',
+            detail: 'No immediate cost, but unsteady crews risk desertion effects.',
+          },
+        ],
+      );
+      if (choice === 'pardon_ringleader') {
+        if (economy.spendSupplies(1)) {
+          economy.addIntel(2);
+          applyFactionReputationDelta(dominantFactionId, 0.12, 'v2_event_card_success');
+          logLine = 'Pardon granted. -1 Supplies, +2 Intel from restored cooperation.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-1);
+          applyFactionReputationDelta(dominantFactionId, -0.2, 'v2_event_card_failure');
+          logLine = 'No stores to back the pardon. Grumbling persists below deck.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        if (crewRoles.has('bosun') || crew.getCrew().length >= 4) {
+          economy.addReputationTokens(1);
+          applyFactionReputationDelta(dominantFactionId, 0.05, 'v2_event_card_neutral');
+          logLine = 'Order enforced cleanly. +1 Token from hardened discipline.';
+          tone = 'neutral';
+          branch = 'neutral';
+        } else {
+          economy.addSupplies(-1);
+          config.totalShips = Math.min(14, config.totalShips + 1);
+          applyFactionReputationDelta(dominantFactionId, -0.3, 'v2_event_card_failure');
+          logLine = 'Execution sparked panic. -1 Supplies and enemy scouts exploit the chaos.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      }
+      break;
+    }
+    case 'relic_hunters_followup': {
+      choice = await ui.showChoicePrompt(
+        card.name,
+        'Competing hunter ships close in on your recovered relic routes.',
+        [
+          {
+            id: 'ambush_hunters',
+            label: 'Ambush Hunter Fleet',
+            detail: 'Aggressive option with bigger upside for scouting crews.',
+          },
+          {
+            id: 'split_haul',
+            label: 'Split The Haul',
+            detail: 'Lower conflict, steady supplies, smaller prestige gain.',
+          },
+        ],
+      );
+      if (choice === 'ambush_hunters') {
+        if (crewRoles.has('lookout') || crewRoles.has('navigator') || stats.maxSpeed >= 15) {
+          economy.addIntel(2);
+          economy.addReputationTokens(1);
+          config.totalShips = Math.max(3, config.totalShips - 1);
+          applyFactionReputationDelta(dominantFactionId, 0.25, 'v2_event_card_success');
+          logLine = 'Hunter fleet ambushed successfully. +2 Intel, +1 Token, fewer enemy hulls.';
+          tone = 'reward';
+          branch = 'success';
+        } else {
+          economy.addSupplies(-2);
+          config.armedPercent = clamp(config.armedPercent + 0.08, 0, 0.95);
+          applyFactionReputationDelta(dominantFactionId, -0.28, 'v2_event_card_failure');
+          logLine = 'Ambush failed. -2 Supplies and armed escorts now shadow us.';
+          tone = 'warning';
+          branch = 'failure';
+        }
+      } else {
+        economy.addSupplies(2);
+        economy.addIntel(1);
+        applyFactionReputationDelta(dominantFactionId, 0.12, 'v2_event_card_neutral');
+        logLine = 'Haul split quietly. +2 Supplies, +1 Intel and reduced pursuit.';
+        tone = 'neutral';
+        branch = 'neutral';
+      }
+      break;
+    }
+    default:
+      logLine = 'Rumors shift the tide, but details remain uncertain.';
+      tone = 'neutral';
+      break;
+  }
+
+  if (choice !== 'none') {
+    queueFollowupChoice(card.id, choice);
+  }
+
+  narrative.queue(`${card.name}: ${logLine}`, tone);
+  ui.showCaptainLog(`${card.name}: ${logLine}`, tone);
+  telemetry.track('v2_event_card', {
+    id: card.id,
+    payload: card.payload,
+    trigger: card.trigger,
+    region: card.region,
+    faction: dominantFactionId ?? 'neutral',
+    choice,
+    branch,
+  });
 }
 
 // Track active wave config (V1 with enemy types + boss info)
 let activeWaveConfigV1: WaveConfigV1 | null = null;
 let currentBoss: MerchantV1 | null = null;
 
+interface ActiveContractObjective {
+  wave: number;
+  factionId: string | null;
+  factionName: string;
+  contractType: 'captures' | 'armed_captures' | 'plunder_gold';
+  target: number;
+  rewardSupplies: number;
+  rewardIntel: number;
+  rewardTokens: number;
+  rewardGold: number;
+  penaltySupplies: number;
+  penaltyIntel: number;
+  progressLabel: string;
+  targetLabel: string;
+  announcedMidpoint: boolean;
+  announcedComplete: boolean;
+}
+
 function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
   const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
   const props = EnemyAISystem.getSpawnProps(enemyType, isBoss, waveConfig);
+  if (gameStarted && !screensaverActive) {
+    unlockEnemyCodex(enemyType);
+  }
 
   const angle = Math.random() * Math.PI * 2;
   const dist = 30 + Math.random() * 40;
@@ -392,6 +2057,21 @@ let tutorialCaptured = false;
 let tutorialUpgraded = false;
 let islandDiscoveryScanTimer = 0;
 const discoveredIslandSeeds = new Set<number>();
+let v2HudRefreshTimer = 0;
+let factionFeedbackTimer = 0;
+const pendingFactionReputation = new Map<string, number>();
+let capturesThisWave = 0;
+let armedCapturesThisWave = 0;
+let waveCaptureGold = 0;
+let activeContractObjective: ActiveContractObjective | null = null;
+const v2EventCardCooldowns = new Map<string, number>();
+const pendingFollowupChoices = new Map<string, number>();
+let codexOpen = false;
+let codexResumePausedState = false;
+let runSetupOpen = false;
+let selectedRunShipClass: ShipClass = 'brigantine';
+let selectedDoctrineId = v2Content.data.doctrines[0]?.id ?? '';
+let beginWaveInProgress = false;
 
 // Screensaver mode
 let lastIsNight = false;
@@ -442,6 +2122,7 @@ const devPanel = new DevPanel({
   onToggleInstakill: (v) => { devInstakill = v; },
   onSpawnEnemy: (type, isBoss) => spawnEnemy(type, isBoss),
   onSetWeather: (state) => weather.transitionTo(state, 2),
+  onExportTelemetry: () => exportTelemetrySnapshot('dev_panel'),
   getState: () => ({
     gold: progression.getScore(),
     health: progression.getPlayerStats().health,
@@ -455,6 +2136,104 @@ const devPanel = new DevPanel({
   }),
 });
 
+function exportTelemetrySnapshot(reason: string): string {
+  const doctrine = progression.getActiveDoctrine();
+  const snapshot = telemetry.buildExport({
+    reason,
+    wave: progression.getCurrentWave(),
+    score: progression.getScore(),
+    shipClass: progression.getShipClass(),
+    doctrineId: doctrine?.id ?? 'none',
+    doctrineName: doctrine?.name ?? 'None',
+  });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `booty-hunt-telemetry-${stamp}.json`;
+  try {
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    telemetry.track('telemetry_export', {
+      reason,
+      totalEvents: snapshot.totalEvents,
+      filename,
+    });
+    return `Telemetry exported: ${filename} (${snapshot.totalEvents} events)`;
+  } catch {
+    return 'Telemetry export failed.';
+  }
+}
+
+function canOpenCodex(): boolean {
+  if (!gameStarted || screensaverActive) return false;
+  if (beginWaveInProgress) return false;
+  if (inPort || waveCompleteInProgress) return false;
+  const runSummary = document.getElementById('run-summary');
+  if (runSummary && runSummary.style.display !== 'none') return false;
+  return true;
+}
+
+function closeCodex(): void {
+  if (!codexOpen) return;
+  codexOpen = false;
+  ui.hideCodex();
+  gamePaused = codexResumePausedState;
+  codexResumePausedState = false;
+}
+
+function openCodex(): void {
+  if (!canOpenCodex()) return;
+  if (codexOpen) return;
+  codexResumePausedState = gamePaused;
+  gamePaused = true;
+  codexOpen = true;
+  ui.showCodex(buildCodexViewModel());
+  ui.onCodexClose(() => closeCodex());
+}
+
+function toggleCodex(): void {
+  if (codexOpen) {
+    closeCodex();
+    return;
+  }
+  openCodex();
+}
+
+function openRunSetup(): void {
+  if (gameStarted || screensaverActive || runSetupOpen) return;
+  const shipConfigs = getRunSetupShipConfigs();
+  const unlockedShip = shipConfigs.find((cfg) => !cfg.locked)?.id ?? 'brigantine';
+  if (!shipConfigs.some((cfg) => cfg.id === selectedRunShipClass && !cfg.locked)) {
+    selectedRunShipClass = unlockedShip;
+  }
+  const doctrines = getRunSetupDoctrineOptions();
+  if (doctrines.length === 0) {
+    startGame(selectedRunShipClass, selectedDoctrineId);
+    return;
+  }
+
+  runSetupOpen = true;
+  ui.showRunSetup(
+    shipConfigs,
+    doctrines,
+    {
+      shipClass: selectedRunShipClass,
+      doctrineId: selectedDoctrineId,
+    },
+    (shipClass, doctrineId) => {
+      runSetupOpen = false;
+      selectedRunShipClass = shipClass;
+      selectedDoctrineId = doctrineId;
+      ui.hideShipSelect();
+      startGame(shipClass, doctrineId);
+    },
+  );
+}
+
 // ===================================================================
 //  Input: keyboard
 // ===================================================================
@@ -462,18 +2241,38 @@ const devPanel = new DevPanel({
 const keys: Record<string, boolean> = {};
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === ' ' || e.key.startsWith('Arrow') || 'wasdqem'.includes(e.key.toLowerCase())) {
+  if (e.key === ' ' || e.key.startsWith('Arrow') || 'wasdqemcx'.includes(e.key.toLowerCase())) {
     e.preventDefault();
+  }
+  if (runSetupOpen) {
+    if (e.key.toLowerCase() === 'escape') {
+      runSetupOpen = false;
+      ui.hideShipSelect();
+    }
+    return;
   }
   keys[e.key.toLowerCase()] = true;
   if (e.key === '`') { devPanel?.toggle(); return; }
   if (screensaverActive && e.key !== 'F5' && e.key !== 'F12') { stopScreensaver(); return; }
-  if (!gameStarted && !screensaverActive && e.key !== 'F5' && e.key !== 'F12') startGame();
+  if (!gameStarted && !screensaverActive && e.key !== 'F5' && e.key !== 'F12' && e.key.toLowerCase() !== 'c') {
+    openRunSetup();
+    return;
+  }
+
+  if (e.key.toLowerCase() === 'c' && gameStarted && !screensaverActive) {
+    toggleCodex();
+    return;
+  }
 
   // Mute toggle
   if (e.key.toLowerCase() === 'm' && gameStarted) {
     const muted = audio.toggleMute();
     ui.setMuted(muted);
+  }
+
+  if (e.key.toLowerCase() === 'x' && gameStarted && !screensaverActive) {
+    const message = exportTelemetrySnapshot('hotkey');
+    ui.showCaptainLog(message, 'neutral');
   }
 
   // Cannon firing
@@ -553,7 +2352,11 @@ const joystickThumb = document.getElementById('joystick-thumb')!;
 function handleTouchStart(e: TouchEvent) {
   e.preventDefault();
   if (screensaverActive) { stopScreensaver(); return; }
-  if (!gameStarted) startGame();
+  if (runSetupOpen) return;
+  if (!gameStarted) {
+    openRunSetup();
+    return;
+  }
 
   for (let i = 0; i < e.changedTouches.length; i++) {
     const t = e.changedTouches[i];
@@ -614,6 +2417,15 @@ window.addEventListener('touchstart', handleTouchStart, { passive: false });
 window.addEventListener('touchmove', handleTouchMove, { passive: false });
 window.addEventListener('touchend', handleTouchEnd);
 window.addEventListener('touchcancel', handleTouchEnd);
+window.addEventListener('mousedown', () => {
+  if (screensaverActive) {
+    stopScreensaver();
+    return;
+  }
+  if (!gameStarted && !runSetupOpen) {
+    openRunSetup();
+  }
+});
 
 // ===================================================================
 //  Mobile UI tweaks
@@ -623,7 +2435,7 @@ if (isMobile) {
   const hint = document.getElementById('title-hint');
   if (hint) hint.textContent = 'Touch to set sail';
   const ctrl = document.getElementById('controls');
-  if (ctrl) ctrl.innerHTML = 'Left: Steer &bull; Right: Spyglass &bull; Buttons: Cannons';
+  if (ctrl) ctrl.innerHTML = 'Left: Steer &bull; Right: Spyglass &bull; Buttons: Cannons &bull; Codex button';
 
   ui.showMobileCannonButtons(firePort, fireStarboard);
 }
@@ -637,6 +2449,19 @@ if (isMobile) {
 // ===================================================================
 
 function startScreensaver() {
+  runSetupOpen = false;
+  ui.hideShipSelect();
+  ui.hideChoicePrompt();
+  closeCodex();
+  v2EventCardCooldowns.clear();
+  pendingFollowupChoices.clear();
+  beginWaveInProgress = false;
+  pendingFactionReputation.clear();
+  factionFeedbackTimer = 0;
+  capturesThisWave = 0;
+  armedCapturesThisWave = 0;
+  waveCaptureGold = 0;
+  activeContractObjective = null;
   screensaverActive = true;
   screensaverWeatherTimer = 0;
   screensaverWeatherIndex = 0;
@@ -681,6 +2506,19 @@ function startScreensaver() {
 }
 
 function stopScreensaver() {
+  runSetupOpen = false;
+  ui.hideShipSelect();
+  ui.hideChoicePrompt();
+  closeCodex();
+  v2EventCardCooldowns.clear();
+  pendingFollowupChoices.clear();
+  beginWaveInProgress = false;
+  pendingFactionReputation.clear();
+  factionFeedbackTimer = 0;
+  capturesThisWave = 0;
+  armedCapturesThisWave = 0;
+  waveCaptureGold = 0;
+  activeContractObjective = null;
   screensaverActive = false;
   ui.screensaverMode = false;
 
@@ -866,11 +2704,47 @@ if (screensaverBtn) {
     startScreensaver();
   });
 }
+const codexToggleBtn = document.getElementById('codex-toggle');
+if (codexToggleBtn) {
+  codexToggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleCodex();
+  });
+}
 
-function startGame() {
+function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: string = selectedDoctrineId) {
+  const availableShips = getRunSetupShipConfigs();
+  const fallbackShip = availableShips.find((cfg) => !cfg.locked)?.id ?? 'brigantine';
+  if (!availableShips.some((cfg) => cfg.id === shipClass && !cfg.locked)) {
+    shipClass = fallbackShip;
+  }
+  runSetupOpen = false;
+  ui.hideShipSelect();
+  ui.hideChoicePrompt();
+  closeCodex();
+  v2EventCardCooldowns.clear();
+  pendingFollowupChoices.clear();
+  beginWaveInProgress = false;
+  pendingFactionReputation.clear();
+  factionFeedbackTimer = 0;
+  capturesThisWave = 0;
+  armedCapturesThisWave = 0;
+  waveCaptureGold = 0;
+  activeContractObjective = null;
+  selectedRunShipClass = shipClass;
   if (screensaverActive) stopScreensaver();
   gameStarted = true;
   gamePaused = false;
+  for (const key of Object.keys(keys)) {
+    keys[key] = false;
+  }
+
+  progression.reset();
+  const doctrine = getDoctrineById(doctrineId);
+  selectedDoctrineId = doctrine?.id ?? doctrineId;
+  progression.initializeStats(shipClass, doctrine);
+  syncUpgradesToCombat();
+
   camPos.copy(camera.position);
   camLookAt.set(0, 0, 0);
 
@@ -880,10 +2754,41 @@ function startGame() {
   world.generateIslands();
   const reefData = world.getReefData();
   ocean.setReefPositions(reefData);
+  const runSeed = Math.floor(Math.random() * 0x7fffffff);
+  mapNodes.startRun(runSeed);
+  factions.reset();
+  economy.resetRun();
+  telemetry.resetRun();
+  telemetry.track('run_start', {
+    seed: runSeed,
+    shipClass,
+    doctrine: doctrine?.id ?? 'none',
+  });
   discoveredIslandSeeds.clear();
   islandDiscoveryScanTimer = 0;
+  v2HudRefreshTimer = 0;
+  narrative.reset();
   ui.clearCaptainLog();
   ui.showCaptainLog(`We set course for ${world.getRegionName()}.`, 'neutral');
+  if (doctrine) {
+    ui.showCaptainLog(`Doctrine set: ${doctrine.name}. ${doctrine.summary}`, 'mystic');
+  }
+  narrative.onRunStart(world.getRegionName());
+  const currentRegion = mapNodes.getCurrentRegion();
+  if (currentRegion) {
+    unlockRegionCodex(currentRegion.id);
+    narrative.onRegionEntered(currentRegion.name, currentRegion.theme);
+    const dominantFactionId = applyFactionPressureProfileForRegion(currentRegion.factionPressure);
+    if (dominantFactionId) {
+      unlockFactionCodex(dominantFactionId);
+      const dominantFaction = v2Content.getFaction(dominantFactionId);
+      if (dominantFaction) narrative.onFactionPressure(dominantFaction.name);
+    }
+  } else {
+    EnemyAISystem.resetPressureProfile();
+  }
+  const currentNode = mapNodes.getCurrentNode();
+  if (currentNode) narrative.onNodeStart(currentNode.label);
 
   // Start tutorial for new players
   tutorial.start();
@@ -905,47 +2810,106 @@ function startGame() {
   beginWave();
 }
 
-function beginWave() {
-  // Start wave (progression state transition) and get V1 config
-  progression.startWave();
-  const config = progression.getWaveConfigV1();
-  activeWaveConfigV1 = config;
-  progression.onWaveStart();
-  scoreAtWaveStart = progression.getScore();
+async function beginWave() {
+  if (beginWaveInProgress) return;
+  beginWaveInProgress = true;
+  gamePaused = true;
+  try {
+    // Start wave (progression state transition) and get V1 config
+    progression.startWave();
+    capturesThisWave = 0;
+    armedCapturesThisWave = 0;
+    waveCaptureGold = 0;
+    const baseConfig = progression.getWaveConfigV1();
+    const config = applyMapNodeToWaveConfig(baseConfig);
+    activeWaveConfigV1 = config;
+    progression.onWaveStart();
+    scoreAtWaveStart = progression.getScore();
 
-  // Apply crew bonuses to stats for this wave
-  progression.applyCrewBonuses(crew.getCrewBonuses());
-  syncUpgradesToCombat();
+    // Apply crew bonuses to stats for this wave
+    progression.applyCrewBonuses(crew.getCrewBonuses());
+    syncUpgradesToCombat();
+    const currentNode = mapNodes.getCurrentNode();
+    const nodeRegion = currentNode ? v2Content.getRegion(currentNode.regionId) : null;
+    if (nodeRegion) unlockRegionCodex(nodeRegion.id);
+    const dominantFactionId = nodeRegion
+      ? applyFactionPressureProfileForRegion(nodeRegion.factionPressure)
+      : null;
+    if (dominantFactionId) unlockFactionCodex(dominantFactionId);
+    const dominantFactionName = dominantFactionId
+      ? (v2Content.getFaction(dominantFactionId)?.name ?? null)
+      : null;
+    const eventCard = pickV2EventCard(currentNode?.type, nodeRegion?.id, dominantFactionId);
+    if (eventCard) {
+      await applyV2EventCard(eventCard, config, dominantFactionId);
+    }
+    setupContractObjectiveForWave(config.wave, currentNode?.type, dominantFactionId);
+    if (activeContractObjective) {
+      await resolveContractNegotiationChoice(activeContractObjective);
+    }
+    if (activeContractObjective?.contractType === 'armed_captures') {
+      config.armedPercent = Math.max(config.armedPercent, 0.5);
+      if (!config.enemyTypes.includes('escort_frigate')) config.enemyTypes.push('escort_frigate');
+    } else if (activeContractObjective?.contractType === 'plunder_gold') {
+      if (!config.enemyTypes.includes('merchant_galleon')) config.enemyTypes.push('merchant_galleon');
+    }
 
-  // Wave preview
-  ui.showWavePreview(
-    config.wave,
-    config.weather,
-    config.totalShips,
-    config.armedPercent,
-  );
+    // Wave preview
+    ui.showWavePreview(
+      config.wave,
+      config.weather,
+      config.totalShips,
+      config.armedPercent,
+      {
+        regionName: nodeRegion?.name,
+        nodeLabel: currentNode?.label,
+        factionName: dominantFactionName ?? undefined,
+      },
+    );
 
-  // Wave announcement
-  ui.showWaveAnnouncement(config.wave, config.bossName !== null);
-  waveAnnouncePending = true;
-  waveAnnounceTimer = 1.5;
-  ui.showCaptainLog(getWaveLogLine(config), config.bossName ? 'warning' : 'neutral');
+    // Wave announcement
+    ui.showWaveAnnouncement(config.wave, config.bossName !== null);
+    waveAnnouncePending = true;
+    waveAnnounceTimer = 1.5;
+    ui.showCaptainLog(getWaveLogLine(config), config.bossName ? 'warning' : 'neutral');
+    telemetry.track('wave_start', {
+      wave: config.wave,
+      weather: config.weather,
+      ships: config.totalShips,
+      boss: config.bossName ?? '',
+    });
+    if (currentNode) {
+      narrative.onNodeStart(currentNode.label);
+      telemetry.track('map_node_start', {
+        nodeId: currentNode.id,
+        nodeType: currentNode.type,
+        regionId: currentNode.regionId,
+      });
+    }
 
-  // Weather transition
-  weather.transitionTo(config.weather, config.wave === 1 ? 1 : 10);
+    // Weather transition
+    weather.transitionTo(config.weather, config.wave === 1 ? 1 : 10);
 
-  // Audio weather
-  const weatherCfg = weather.getCurrentConfig();
-  audio.setWeatherIntensity(weatherCfg.windIntensity);
+    // Audio weather
+    const weatherCfg = weather.getCurrentConfig();
+    audio.setWeatherIntensity(weatherCfg.windIntensity);
 
-  // Wave complete audio
-  if (config.wave > 1) {
-    audio.playWaveComplete();
-  }
+    // Wave complete audio
+    if (config.wave > 1) {
+      audio.playWaveComplete();
+    }
 
-  // Trigger special event if wave specifies one
-  if (config.specialEvent) {
-    events.startEvent(config.specialEvent, playerPos, world.getIslands().length);
+    // Trigger special event if wave specifies one
+    if (config.specialEvent) {
+      events.startEvent(config.specialEvent, playerPos, world.getIslands().length);
+      announceEventStart(config.specialEvent);
+    }
+  } finally {
+    beginWaveInProgress = false;
+    ui.hideChoicePrompt();
+    if (gameStarted) {
+      gamePaused = false;
+    }
   }
 }
 
@@ -965,9 +2929,33 @@ function spawnWaveFleet() {
 
   // Use EnemyAI to build the spawn list from the V1 wave config
   const spawnList = EnemyAISystem.getSpawnList(config, config.wave);
+  const nodeRegion = mapNodes.getCurrentRegion();
+  const dominantFactionId = nodeRegion ? getDominantFactionId(nodeRegion.factionPressure) : null;
+  if (dominantFactionId) {
+    telemetry.track('faction_pressure', {
+      faction: dominantFactionId,
+      region: nodeRegion?.id ?? '',
+    });
+  }
+
+  const factionBiasPool = dominantFactionId ? FACTION_ENEMY_BIAS[dominantFactionId] : null;
+  const earlyWave = config.wave <= 2;
+  let biasChance = earlyWave ? 0.2 : 0.45;
+  if (dominantFactionId) {
+    const rep = factions.getReputation(dominantFactionId);
+    const hostility = clamp(-rep / 120, 0, 1);
+    const trust = clamp(rep / 160, 0, 1);
+    biasChance += hostility * 0.24;
+    biasChance -= trust * 0.08;
+  }
+  biasChance = clamp(biasChance, 0.12, 0.8);
 
   for (const entry of spawnList) {
-    spawnEnemy(entry.type, entry.isBoss);
+    let enemyType = entry.type;
+    if (!entry.isBoss && factionBiasPool && factionBiasPool.length > 0 && Math.random() < biasChance) {
+      enemyType = factionBiasPool[Math.floor(Math.random() * factionBiasPool.length)];
+    }
+    spawnEnemy(enemyType, entry.isBoss);
   }
 
   // Organize navy_warship formations
@@ -982,6 +2970,7 @@ async function onWaveComplete() {
   waveCompleteInProgress = true;
   gamePaused = true;
   ui.hideBossHealthBar();
+  resolveContractObjectiveOnWaveComplete(activeWaveConfigV1?.wave ?? progression.getCurrentWave());
 
   await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -1018,24 +3007,73 @@ async function onWaveComplete() {
 
   // Add meta gold (only wave earnings, not cumulative total)
   progression.addMetaGold(progression.getScore() - scoreAtWaveStart);
+  economy.addReputationTokens(1);
 
   gamePaused = false;
 
   // Victory check — after final wave, show run summary
   if (progression.checkVictory()) {
+    closeCodex();
+    pendingFactionReputation.clear();
+    factionFeedbackTimer = 0;
+    capturesThisWave = 0;
+    armedCapturesThisWave = 0;
+    waveCaptureGold = 0;
+    activeContractObjective = null;
+    telemetry.track('run_victory', { wave: progression.getCurrentWave() });
     gamePaused = true;
     waveCompleteInProgress = false;
     victoryConfetti.start();
     audio.playWaveComplete();
+    progression.setFactionReputationSnapshot(factions.getReputationSnapshot());
     const runStats = progression.getRunStats();
-    ui.showRunSummary(runStats, []);
+    const unlocks = progression.checkUnlocks(runStats);
+    const hostile = progression.getMostHostileFaction();
+    const allied = progression.getMostAlliedFaction();
+    const doctrine = progression.getActiveDoctrine();
+    progression.saveHighScore();
+    progression.saveMetaStats();
+    ui.showRunSummary(runStats, unlocks, {
+      codexCount: progression.getCodexEntryCount(),
+      doctrineName: doctrine?.name ?? null,
+      hostileFactionId: hostile?.id ?? null,
+      hostileFactionScore: hostile?.score ?? null,
+      alliedFactionId: allied?.id ?? null,
+      alliedFactionScore: allied?.score ?? null,
+    });
+    ui.onRunSummaryRestart(() => {
+      ui.hideRunSummary();
+      restartGame();
+    });
     return;
   }
 
   // Port visit on port waves
   const waveConfig = activeWaveConfigV1 ?? progression.getWaveConfigV1();
+  const nextNode = mapNodes.advanceNode();
+  if (nextNode) {
+    telemetry.track('map_node_advance', {
+      nextNodeId: nextNode.id,
+      nextNodeType: nextNode.type,
+      nextRegion: nextNode.regionId,
+    });
+    const nextRegionCfg = v2Content.getRegion(nextNode.regionId);
+    if (nextRegionCfg) {
+      unlockRegionCodex(nextRegionCfg.id);
+      narrative.onRegionEntered(nextRegionCfg.name, nextRegionCfg.theme);
+      const dominantFactionId = applyFactionPressureProfileForRegion(nextRegionCfg.factionPressure);
+      if (dominantFactionId) {
+        unlockFactionCodex(dominantFactionId);
+        const faction = v2Content.getFaction(dominantFactionId);
+        if (faction) narrative.onFactionPressure(faction.name);
+      }
+    } else {
+      EnemyAISystem.resetPressureProfile();
+    }
+  }
   waveCompleteInProgress = false;
-  if (waveConfig.isPortWave) {
+  const shouldPort = waveConfig.isPortWave || nextNode?.type === 'port';
+  if (shouldPort) {
     enterPort();
   } else {
     beginWave();
@@ -1072,7 +3110,11 @@ function rebuildPlayerShip() {
 function enterPort() {
   gamePaused = true;
   inPort = true;
-  ui.showCaptainLog('Dropping anchor at Port Royal for repairs and rumors.', 'neutral');
+  const marketProfile = getPortMarketProfile();
+  const harborLabel = marketProfile.context.factionName
+    ? `${marketProfile.context.factionName} harbor`
+    : 'Port Royal';
+  ui.showCaptainLog(`Dropping anchor at ${harborLabel} for repairs and rumors.`, 'neutral');
   audio.setPortMode(true);
   audio.playPortAmbience();
 
@@ -1084,9 +3126,32 @@ function enterPort() {
   const stats = progression.getPlayerStats();
   const shopUpgrades = progression.getAvailableUpgradesForShop();
   const costMap: Record<string, number> = {};
+  const tierMult = marketProfile.tierMultiplier;
   for (const u of shopUpgrades) {
-    costMap[u.id] = u.tier === 'legendary' ? 1500 : u.tier === 'rare' ? 500 : 200;
+    const baseCost = u.tier === 'legendary' ? 1500 : u.tier === 'rare' ? 500 : 200;
+    const tierFactor = u.tier === 'legendary' ? tierMult.legendary : u.tier === 'rare' ? tierMult.rare : tierMult.common;
+    costMap[u.id] = Math.max(75, Math.round(baseCost * marketProfile.shopMultiplier * tierFactor));
   }
+  const repairCostPer10 = Math.max(35, Math.round(100 * marketProfile.repairMultiplier));
+  const getCrewHireCost = (role: keyof typeof CREW_ROLE_CONFIGS): number => {
+    return Math.max(90, Math.round(CREW_ROLE_CONFIGS[role].cost * marketProfile.crewMultiplier));
+  };
+  const mapCrewHireRows = (roles: Array<{ role: keyof typeof CREW_ROLE_CONFIGS } & { name: string; icon: string; bonusPerLevel: string }>) => {
+    return roles.map(r => ({
+      role: r.role,
+      name: CREW_ROLE_CONFIGS[r.role].name,
+      icon: CREW_ROLE_CONFIGS[r.role].icon,
+      cost: getCrewHireCost(r.role),
+      bonusPerLevel: CREW_ROLE_CONFIGS[r.role].bonusPerLevel,
+    }));
+  };
+  telemetry.track('port_market', {
+    faction: marketProfile.context.factionId ?? 'neutral',
+    rep: Math.round(marketProfile.context.reputation),
+    shopMult: Number(marketProfile.shopMultiplier.toFixed(3)),
+    repairMult: Number(marketProfile.repairMultiplier.toFixed(3)),
+    crewMult: Number(marketProfile.crewMultiplier.toFixed(3)),
+  });
 
   ui.showPortUI(
     progression.getScore(),
@@ -1105,6 +3170,7 @@ function enterPort() {
       const cost = costMap[upgradeId];
       if (progression.purchaseUpgrade(upgradeId, cost)) {
         audio.playPurchase();
+        applyRegionalFactionReputationDelta(0.35, 'port_upgrade_purchase');
         ui.updatePortGold(progression.getScore());
         const newStats = progression.getPlayerStats();
         ui.updatePortHealth(newStats.health, newStats.maxHealth);
@@ -1114,20 +3180,23 @@ function enterPort() {
     },
     (amount: number) => {
       // Repair
-      const costPer10 = 100;
+      const currentStats = progression.getPlayerStats();
       if (amount === -1) {
         // Full repair
-        const needed = stats.maxHealth - stats.health;
-        const cost = Math.ceil(needed / 10) * costPer10;
+        const needed = currentStats.maxHealth - currentStats.health;
+        const cost = Math.ceil(needed / 10) * repairCostPer10;
         if (progression.repairHealth(needed, cost)) {
           audio.playPurchase();
+          applyRegionalFactionReputationDelta(0.2, 'port_repair');
           ui.updatePortGold(progression.getScore());
           const newStats = progression.getPlayerStats();
           ui.updatePortHealth(newStats.health, newStats.maxHealth);
         }
       } else {
-        if (progression.repairHealth(amount, costPer10)) {
+        const chunkCost = Math.ceil(amount / 10) * repairCostPer10;
+        if (progression.repairHealth(amount, chunkCost)) {
           audio.playPurchase();
+          applyRegionalFactionReputationDelta(0.12, 'port_repair');
           ui.updatePortGold(progression.getScore());
           const newStats = progression.getPlayerStats();
           ui.updatePortHealth(newStats.health, newStats.maxHealth);
@@ -1138,50 +3207,48 @@ function enterPort() {
       // Set sail
       leavePort();
     },
+    {
+      repairCostPer10,
+      marketTitle: marketProfile.marketTitle,
+      marketNotes: marketProfile.marketNotes,
+    },
   );
 
   // Show crew hiring UI in tavern
   const availableRoles = crew.getAvailableRoles(progression.getMetaStatsV1());
   const gold = progression.getScore();
+  const handleCrewHire = (role: string) => {
+    const crewRole = role as keyof typeof CREW_ROLE_CONFIGS;
+    const cost = getCrewHireCost(crewRole);
+    const check = crew.canHire(crewRole, progression.getScore(), progression.getMetaStatsV1(), cost);
+    if (check.canHire) {
+      progression.addScore(-cost);
+      crew.hire(crewRole);
+      progression.addCrewHired();
+      applyRegionalFactionReputationDelta(0.45, 'port_crew_hire');
+      progression.applyCrewBonuses(crew.getCrewBonuses());
+      audio.playPurchase();
+      ui.updatePortGold(progression.getScore());
+      ui.updateCrewHUD(crew.getCrew().map(c => ({
+        role: c.role,
+        level: c.level,
+        icon: CREW_ROLE_CONFIGS[c.role].icon,
+      })));
+      // Refresh crew hire UI with the same handler
+      const refreshRoles = crew.getAvailableRoles(progression.getMetaStatsV1());
+      ui.showPortCrewHire(
+        mapCrewHireRows(refreshRoles),
+        progression.getScore(),
+        handleCrewHire,
+      );
+    } else if (check.reason) {
+      ui.showCaptainLog(check.reason, 'warning');
+    }
+  };
   ui.showPortCrewHire(
-    availableRoles.map(r => ({
-      role: r.role,
-      name: CREW_ROLE_CONFIGS[r.role].name,
-      icon: CREW_ROLE_CONFIGS[r.role].icon,
-      cost: CREW_ROLE_CONFIGS[r.role].cost,
-      bonusPerLevel: CREW_ROLE_CONFIGS[r.role].bonusPerLevel,
-    })),
+    mapCrewHireRows(availableRoles),
     gold,
-    (role: string) => {
-      const crewRole = role as keyof typeof CREW_ROLE_CONFIGS;
-      const cost = CREW_ROLE_CONFIGS[crewRole].cost;
-      const check = crew.canHire(crewRole, progression.getScore(), progression.getMetaStatsV1());
-      if (check.canHire) {
-        progression.addScore(-cost);
-        crew.hire(crewRole);
-        progression.applyCrewBonuses(crew.getCrewBonuses());
-        audio.playPurchase();
-        ui.updatePortGold(progression.getScore());
-        ui.updateCrewHUD(crew.getCrew().map(c => ({
-          role: c.role,
-          level: c.level,
-          icon: CREW_ROLE_CONFIGS[c.role].icon,
-        })));
-        // Refresh crew hire UI
-        const refreshRoles = crew.getAvailableRoles(progression.getMetaStatsV1());
-        ui.showPortCrewHire(
-          refreshRoles.map(r => ({
-            role: r.role,
-            name: CREW_ROLE_CONFIGS[r.role].name,
-            icon: CREW_ROLE_CONFIGS[r.role].icon,
-            cost: CREW_ROLE_CONFIGS[r.role].cost,
-            bonusPerLevel: CREW_ROLE_CONFIGS[r.role].bonusPerLevel,
-          })),
-          progression.getScore(),
-          () => {}, // placeholder, won't be used since we're already in port
-        );
-      }
-    },
+    handleCrewHire,
   );
 }
 
@@ -1203,8 +3270,22 @@ function leavePort() {
 }
 
 async function onGameOver() {
+  beginWaveInProgress = false;
+  ui.hideChoicePrompt();
+  closeCodex();
+  pendingFactionReputation.clear();
+  factionFeedbackTimer = 0;
+  capturesThisWave = 0;
+  armedCapturesThisWave = 0;
+  waveCaptureGold = 0;
+  activeContractObjective = null;
   gamePaused = true;
+  telemetry.track('run_game_over', {
+    wave: progression.getCurrentWave(),
+    score: progression.getScore(),
+  });
   progression.saveHighScore();
+  progression.setFactionReputationSnapshot(factions.getReputationSnapshot());
   progression.saveMetaStats();
   ui.hideBossHealthBar();
 
@@ -1219,6 +3300,19 @@ async function onGameOver() {
 }
 
 function restartGame() {
+  runSetupOpen = false;
+  ui.hideShipSelect();
+  ui.hideChoicePrompt();
+  closeCodex();
+  v2EventCardCooldowns.clear();
+  pendingFollowupChoices.clear();
+  beginWaveInProgress = false;
+  pendingFactionReputation.clear();
+  factionFeedbackTimer = 0;
+  capturesThisWave = 0;
+  armedCapturesThisWave = 0;
+  waveCaptureGold = 0;
+  activeContractObjective = null;
   // Clear all merchants
   for (const m of merchants) {
     scene.remove(m.mesh);
@@ -1240,12 +3334,29 @@ function restartGame() {
 
   // Reset progression
   progression.reset();
+  const doctrine = getDoctrineById(selectedDoctrineId);
+  if (doctrine) {
+    selectedDoctrineId = doctrine.id;
+  }
+  progression.initializeStats(selectedRunShipClass, doctrine);
+  syncUpgradesToCombat();
+  const runSeed = Math.floor(Math.random() * 0x7fffffff);
+  mapNodes.startRun(runSeed);
+  factions.reset();
+  economy.resetRun();
+  telemetry.resetRun();
+  telemetry.track('run_restart', {
+    reason: 'game_restart',
+    shipClass: selectedRunShipClass,
+    doctrine: doctrine?.id ?? 'none',
+  });
   gameOverFired = false;
   waveCompleteInProgress = false;
   waveCompleteTimer = 0;
   waveAnnouncePending = false;
   waveAnnounceTimer = 0;
   activeWaveConfigV1 = null;
+  ui.hideRunSummary();
 
   // Reset new systems
   world.dispose();
@@ -1261,8 +3372,26 @@ function restartGame() {
   tutorialUpgraded = false;
   islandDiscoveryScanTimer = 0;
   discoveredIslandSeeds.clear();
+  v2HudRefreshTimer = 0;
+  narrative.reset();
   ui.clearCaptainLog();
   ui.showCaptainLog(`Back through ${world.getRegionName()} we sail.`, 'neutral');
+  if (doctrine) {
+    ui.showCaptainLog(`Doctrine set: ${doctrine.name}. ${doctrine.summary}`, 'mystic');
+  }
+  narrative.onRunStart(world.getRegionName());
+  const currentRegion = mapNodes.getCurrentRegion();
+  if (currentRegion) {
+    unlockRegionCodex(currentRegion.id);
+    const dominantFactionId = applyFactionPressureProfileForRegion(currentRegion.factionPressure);
+    if (dominantFactionId) {
+      unlockFactionCodex(dominantFactionId);
+      const dominantFaction = v2Content.getFaction(dominantFactionId);
+      if (dominantFaction) narrative.onFactionPressure(dominantFaction.name);
+    }
+  } else {
+    EnemyAISystem.resetPressureProfile();
+  }
 
   // Clean up effects
   krakenTentacle.dispose();
@@ -1588,6 +3717,7 @@ function updateMerchants(dt: number) {
 
         // Damage player if in range (skip in screensaver or god mode — invincible)
         if (explResult.playerDamage > 0 && !screensaverActive && !devGodMode) {
+          progression.addDamageTaken(explResult.playerDamage);
           const dead = progression.takeDamage(explResult.playerDamage);
           ui.updateHealth(stats.health, stats.maxHealth);
           if (dead && !gameOverFired) {
@@ -1738,9 +3868,43 @@ function triggerCapture(m: MerchantV1, _index: number) {
   const now = performance.now() / 1000;
   combo = (now - lastCaptureTime < 5) ? combo + 1 : 1;
   lastCaptureTime = now;
+  progression.updateBestCombo(combo);
 
   const reward = m.value * combo;
+  capturesThisWave++;
+  if (m.armed) armedCapturesThisWave++;
+  waveCaptureGold += reward;
+  if (activeContractObjective) {
+    const progress = getContractObjectiveProgress(activeContractObjective);
+    const halfwayTarget = activeContractObjective.contractType === 'plunder_gold'
+      ? Math.round(activeContractObjective.target * 0.5)
+      : Math.ceil(activeContractObjective.target * 0.5);
+
+    if (!activeContractObjective.announcedMidpoint && progress >= halfwayTarget) {
+      activeContractObjective.announcedMidpoint = true;
+      ui.showCaptainLog(
+        `Contract progress: ${formatContractProgress(activeContractObjective, progress)}.`,
+        'neutral',
+      );
+    }
+    if (!activeContractObjective.announcedComplete && progress >= activeContractObjective.target) {
+      activeContractObjective.announcedComplete = true;
+      ui.showCaptainLog(
+        `Contract objective met: ${formatContractProgress(activeContractObjective, progress)}.`,
+        'reward',
+      );
+    }
+  }
   progression.addScore(reward);
+  economy.addSupplies(1);
+  if (m.armed) economy.addIntel(1);
+  telemetry.track('ship_captured', {
+    enemyType: m.enemyType,
+    reward,
+    combo,
+    armed: m.armed,
+  });
+  applyRegionalFactionReputationDelta(m.isBoss ? -1.25 : -0.4, m.isBoss ? 'boss_capture' : 'ship_capture');
   ui.updateScoreAnimated(progression.getScore());
   ui.showCapture(`+${reward} Gold!`, combo);
   goldBurst.emit(m.pos, 30 + combo * 8);
@@ -1767,6 +3931,7 @@ function triggerCapture(m: MerchantV1, _index: number) {
     currentBoss = null;
     ui.hideBossHealthBar();
     progression.addScore(m.value * 4);
+    economy.addReputationTokens(2);
   }
 
   // Roll for treasure map drop
@@ -1849,6 +4014,7 @@ function updateCombat(dt: number) {
     // Check if this is a kraken tentacle hit (id >= 10000)
     if (hit.targetId >= 10000) {
       const tentIndex = hit.targetId - 10000;
+      progression.addDamageDealt(hit.damage);
       const destroyed = events.hitTentacle(tentIndex, hit.damage);
       explosionEffect.emit(hit.hitPos, 25);
       audio.playExplosion(hit.hitPos, playerPos);
@@ -1862,6 +4028,8 @@ function updateCombat(dt: number) {
     const m = merchants.find(m => m.id === hit.targetId);
     if (!m || m.state === 'sinking') continue;
 
+    const dealt = devInstakill ? m.hp : Math.min(hit.damage, m.hp);
+    if (dealt > 0) progression.addDamageDealt(dealt);
     if (devInstakill) m.hp = 0; else m.hp -= hit.damage;
 
     // Chain shot effect
@@ -1896,6 +4064,7 @@ function updateCombat(dt: number) {
 
       if (!devGodMode) {
         const stats = progression.getPlayerStats();
+        progression.addDamageTaken(playerHit.damage);
         const dead = progression.takeDamage(playerHit.damage);
 
         // Screen juice: damage flash + direction indicator
@@ -1996,6 +4165,7 @@ function updateWorld(dt: number) {
         discoveredIslandSeeds.add(island.seed);
         const typeLabel = island.type.charAt(0).toUpperCase() + island.type.slice(1);
         ui.showCaptainLog(`Landmark charted: ${island.name} (${typeLabel} isle).`, 'neutral');
+        unlockCodexEntry(`landmark:${island.type}`, `Landmark: ${typeLabel} Isles`);
         discoveredThisTick = true;
       }
       if (discoveredThisTick) break;
@@ -2009,6 +4179,7 @@ function updateWorld(dt: number) {
     playerSpeed *= 0.5;
   }
   if (collision.reefDamage > 0 && !devGodMode) {
+    progression.addDamageTaken(collision.reefDamage);
     const dead = progression.takeDamage(collision.reefDamage);
     const stats = progression.getPlayerStats();
     ui.updateHealth(stats.health, stats.maxHealth);
@@ -2024,6 +4195,13 @@ function updateWorld(dt: number) {
   if (digIsland) {
     const treasureGold = 200 + Math.floor(Math.random() * 600);
     progression.addScore(treasureGold);
+    progression.addTreasureFound();
+    economy.addSupplies(3);
+    economy.addIntel(2);
+    telemetry.track('treasure_found', {
+      island: digIsland.name,
+      gold: treasureGold,
+    });
     ui.showCapture(`+${treasureGold} Treasure!`, 1);
     ui.showCaptainLog(`We dug up ${treasureGold} gold at ${digIsland.name}.`, 'reward');
     goldBurst.emit(playerPos, 50);
@@ -2057,7 +4235,25 @@ function updateEvents(dt: number) {
 
   // Roll for random events once per second
   if (events.shouldRoll()) {
-    const eventType = events.rollForEvent(waveNum, weatherState);
+    const rollMultiplier = getRegionalEventPressureMultiplier();
+    let eventType: EventType | null = null;
+
+    if (rollMultiplier < 1) {
+      if (Math.random() < rollMultiplier) {
+        eventType = events.rollForEvent(waveNum, weatherState);
+      }
+    } else {
+      eventType = events.rollForEvent(waveNum, weatherState);
+      const extraRolls = Math.floor(rollMultiplier - 1);
+      for (let i = 0; i < extraRolls && !eventType; i++) {
+        eventType = events.rollForEvent(waveNum, weatherState);
+      }
+      const fractionalRoll = (rollMultiplier - 1) - extraRolls;
+      if (!eventType && Math.random() < fractionalRoll) {
+        eventType = events.rollForEvent(waveNum, weatherState);
+      }
+    }
+
     if (eventType) {
       events.startEvent(eventType, playerPos, world.getIslands().length);
       announceEventStart(eventType);
@@ -2095,6 +4291,7 @@ function updateEvents(dt: number) {
 
   // Apply event damage to player
   if (result.damageToPlayer > 0 && !devGodMode) {
+    progression.addDamageTaken(result.damageToPlayer);
     const dead = progression.takeDamage(result.damageToPlayer);
     const stats = progression.getPlayerStats();
     ui.updateHealth(stats.health, stats.maxHealth);
@@ -2140,6 +4337,7 @@ function updateEvents(dt: number) {
     } else if (currentEvt.type === 'sea_serpent') {
       const serpentDmg = seaSerpentEffect.update(dt, time, playerPos);
       if (serpentDmg > 0 && !devGodMode) {
+        progression.addDamageTaken(serpentDmg * dt);
         const dead = progression.takeDamage(serpentDmg * dt);
         const stats = progression.getPlayerStats();
         ui.updateHealth(stats.health, stats.maxHealth);
@@ -2156,6 +4354,7 @@ function updateEvents(dt: number) {
 
   // Event completed
   if (result.eventComplete) {
+    progression.addEventCompleted();
     if (activeEventType) {
       const success = result.goldReward > 0 || result.damageToPlayer <= 0;
       announceEventEnd(activeEventType, success);
@@ -2187,6 +4386,16 @@ function updateTutorial(dt: number) {
     upgraded: tutorialUpgraded,
   });
   tutorial.update(dt);
+}
+
+function updateV2Hud(dt: number) {
+  v2HudRefreshTimer -= dt;
+  if (v2HudRefreshTimer > 0) return;
+  v2HudRefreshTimer = 0.2;
+  const econ = economy.getState();
+  ui.updateV2Resources(econ.supplies, econ.intel, econ.reputationTokens);
+  const context = getRegionalFactionContext();
+  ui.updateV2FactionStatus(context.factionName, context.reputation);
 }
 
 // ===================================================================
@@ -2249,11 +4458,17 @@ function animate(now: number) {
     updateWorld(dt);
     updateEvents(dt);
     updateTutorial(dt);
+    updateV2Hud(dt);
+    updateFactionFeedback(dt);
     updateWaveLifecycle(dt);
     updateCamera(dt);
+    narrative.update(dt);
   } else if (gameStarted && gamePaused) {
     updateWeather(dt);
+    updateV2Hud(dt);
+    updateFactionFeedback(dt);
     updateCamera(dt);
+    narrative.update(dt);
     // Update port scene if active
     if (portScene) {
       portScene.update(dt, time);
@@ -2294,6 +4509,7 @@ function animate(now: number) {
 
     // Follow camera
     updateCamera(dt);
+    narrative.update(dt);
 
     // Periodic merchant spawning
     screensaverSpawnTimer += dt;
@@ -2329,6 +4545,7 @@ function animate(now: number) {
     playerGroup.rotation.x = -Math.atan(w.slopeZ) * 0.3;
     playerGroup.rotation.z = -Math.atan(w.slopeX) * 0.3;
     updateShipSails(playerGroup, time, 0.8);
+    narrative.update(dt);
   }
 
   // Effects always update (even paused, for decay)

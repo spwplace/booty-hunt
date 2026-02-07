@@ -7,6 +7,7 @@ import type {
   SaveDataV1,
 } from './Types';
 import { SHIP_CLASS_CONFIGS, WAVE_TABLE } from './Types';
+import type { V2Doctrine } from './V2Content';
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -482,6 +483,8 @@ function createDefaultSaveV1(): SaveDataV1 {
     musicVolume: 0.7,
     sfxVolume: 1,
     graphicsQuality: 'high',
+    v2CodexDiscovered: [],
+    v2FactionReputation: {},
   };
 }
 
@@ -509,6 +512,16 @@ function loadSaveV1(): SaveDataV1 {
         musicVolume: data.musicVolume ?? 0.7,
         sfxVolume: data.sfxVolume ?? 1,
         graphicsQuality: data.graphicsQuality ?? 'high',
+        v2CodexDiscovered: Array.isArray(data.v2CodexDiscovered)
+          ? data.v2CodexDiscovered.filter((v): v is string => typeof v === 'string')
+          : [],
+        v2FactionReputation: typeof data.v2FactionReputation === 'object' && data.v2FactionReputation !== null
+          ? Object.fromEntries(
+            Object.entries(data.v2FactionReputation as Record<string, unknown>)
+              .filter(([, value]) => typeof value === 'number')
+              .map(([key, value]) => [key, value as number]),
+          )
+          : {},
       };
     }
   } catch {
@@ -684,6 +697,7 @@ export class ProgressionSystem {
 
   // Endless mode flag
   private endlessMode: boolean;
+  private activeDoctrine: V2Doctrine | null;
 
   constructor() {
     this.stats = createDefaultStats();
@@ -700,6 +714,7 @@ export class ProgressionSystem {
     this.shipClass = 'brigantine';
     this.upgradeBonus = 0;
     this.endlessMode = false;
+    this.activeDoctrine = null;
 
     const saveV1 = loadSaveV1();
     this.metaStatsV1 = saveV1;
@@ -730,9 +745,17 @@ export class ProgressionSystem {
    * Initialize stats based on the selected ship class.
    * Should be called at the start of a new run before beginWave().
    */
-  initializeStats(shipClass: ShipClass = 'brigantine'): void {
+  initializeStats(shipClass: ShipClass = 'brigantine', doctrine: V2Doctrine | null = null): void {
     this.shipClass = shipClass;
     this.stats = createDefaultStats();
+    this.acquiredUpgradeIds = [];
+    this.activeSynergies = [];
+    this.activeDoctrine = doctrine
+      ? {
+        ...doctrine,
+        startingBonuses: { ...doctrine.startingBonuses },
+      }
+      : null;
 
     const config = SHIP_CLASS_CONFIGS[shipClass];
 
@@ -750,6 +773,10 @@ export class ProgressionSystem {
       this.stats.ghostDodgeChance = (this.stats.ghostDodgeChance ?? 0) + config.dodgeBonus;
     }
 
+    if (this.activeDoctrine) {
+      this.applyDoctrineBonuses(this.activeDoctrine);
+    }
+
     // Store upgrade bonus for later use when applying upgrades
     this.upgradeBonus = config.upgradeBonus;
 
@@ -759,6 +786,14 @@ export class ProgressionSystem {
 
     // Re-apply meta bonuses on top of ship class stats
     this.applyMetaBonuses();
+  }
+
+  private applyDoctrineBonuses(doctrine: V2Doctrine): void {
+    const bonuses = doctrine.startingBonuses;
+    this.stats.maxSpeed *= bonuses.speedMult;
+    this.stats.cannonDamage *= bonuses.cannonDamageMult;
+    this.stats.maxHealth = Math.max(1, Math.round(this.stats.maxHealth * bonuses.maxHealthMult));
+    this.stats.health = Math.min(this.stats.health, this.stats.maxHealth);
   }
 
   /** Get the current ship class */
@@ -893,6 +928,60 @@ export class ProgressionSystem {
 
   getMetaStatsV1(): SaveDataV1 {
     return { ...this.metaStatsV1 };
+  }
+
+  getActiveDoctrine(): { id: string; name: string; summary: string } | null {
+    if (!this.activeDoctrine) return null;
+    return {
+      id: this.activeDoctrine.id,
+      name: this.activeDoctrine.name,
+      summary: this.activeDoctrine.summary,
+    };
+  }
+
+  unlockCodexEntry(entryId: string): boolean {
+    const id = entryId.trim();
+    if (!id) return false;
+    if (this.metaStatsV1.v2CodexDiscovered.includes(id)) return false;
+    this.metaStatsV1.v2CodexDiscovered.push(id);
+    writeSaveV1(this.metaStatsV1);
+    return true;
+  }
+
+  getCodexEntryCount(): number {
+    return this.metaStatsV1.v2CodexDiscovered.length;
+  }
+
+  getCodexEntries(): string[] {
+    return [...this.metaStatsV1.v2CodexDiscovered];
+  }
+
+  setFactionReputationSnapshot(snapshot: Record<string, number>): void {
+    this.metaStatsV1.v2FactionReputation = { ...snapshot };
+  }
+
+  getFactionReputationSnapshot(): Record<string, number> {
+    return { ...this.metaStatsV1.v2FactionReputation };
+  }
+
+  getMostHostileFaction(): { id: string; score: number } | null {
+    let result: { id: string; score: number } | null = null;
+    for (const [id, score] of Object.entries(this.metaStatsV1.v2FactionReputation)) {
+      if (!result || score < result.score) {
+        result = { id, score };
+      }
+    }
+    return result;
+  }
+
+  getMostAlliedFaction(): { id: string; score: number } | null {
+    let result: { id: string; score: number } | null = null;
+    for (const [id, score] of Object.entries(this.metaStatsV1.v2FactionReputation)) {
+      if (!result || score > result.score) {
+        result = { id, score };
+      }
+    }
+    return result;
   }
 
   hasMetaBonus(id: string): boolean {
@@ -1614,6 +1703,7 @@ export class ProgressionSystem {
     this.acquiredUpgradeIds = [];
     this.activeSynergies = [];
     this.endlessMode = false;
+    this.activeDoctrine = null;
 
     // Reload save for latest meta-stats (including any purchases)
     this.metaStatsV1 = loadSaveV1();

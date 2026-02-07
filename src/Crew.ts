@@ -122,6 +122,7 @@ export class CrewSystem {
     role: CrewRole,
     gold: number,
     saveData: SaveDataV1,
+    costOverride?: number,
   ): { canHire: boolean; reason?: string } {
     // Crew cap
     if (this.crew.length >= this.maxSlots) {
@@ -143,8 +144,9 @@ export class CrewSystem {
     }
 
     // Gold check
-    if (gold < config.cost) {
-      return { canHire: false, reason: `Need ${config.cost} gold` };
+    const hireCost = typeof costOverride === 'number' ? costOverride : config.cost;
+    if (gold < hireCost) {
+      return { canHire: false, reason: `Need ${hireCost} gold` };
     }
 
     return { canHire: true };

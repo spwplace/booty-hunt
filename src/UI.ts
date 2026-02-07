@@ -7,6 +7,40 @@ interface CaptainLogEntry {
   tone: CaptainLogTone;
 }
 
+export interface CodexEntryView {
+  id: string;
+  name: string;
+  detail: string;
+  unlocked: boolean;
+}
+
+export interface CodexSectionView {
+  title: string;
+  discovered: number;
+  total: number;
+  entries: CodexEntryView[];
+}
+
+export interface CodexViewModel {
+  completionPct: number;
+  discovered: number;
+  total: number;
+  sections: CodexSectionView[];
+}
+
+export interface DoctrineSetupOption {
+  id: string;
+  name: string;
+  summary: string;
+  bonusLabel: string;
+}
+
+export interface ChoicePromptOption {
+  id: string;
+  label: string;
+  detail: string;
+}
+
 export class UI {
   private titleEl: HTMLElement;
   private scoreEl: HTMLElement;
@@ -79,6 +113,7 @@ export class UI {
   private portFullRepairBtn: HTMLElement | null = null;
   private portGoldDisplay: HTMLElement | null = null;
   private portSetSailBtn: HTMLElement | null = null;
+  private portRepairCostPer10 = 100;
 
   // Animated score
   private displayedScore: number = 0;
@@ -109,6 +144,15 @@ export class UI {
   private captainLogTimeout: ReturnType<typeof setTimeout> | null = null;
   private captainLogBusy = false;
   private lastCaptainLog = '';
+  private v2ResourcesEl: HTMLElement | null = null;
+  private lastV2ResourcesText = '';
+  private v2FactionEl: HTMLElement | null = null;
+  private lastV2FactionText = '';
+  private codexPanelEl: HTMLElement | null = null;
+  private codexSummaryEl: HTMLElement | null = null;
+  private codexSectionsEl: HTMLElement | null = null;
+  private codexDiscoveryTimeout: ReturnType<typeof setTimeout> | null = null;
+  private choicePanelEl: HTMLElement | null = null;
 
   // Screensaver mode: when true, gameplay UI updates are no-ops
   screensaverMode = false;
@@ -171,6 +215,12 @@ export class UI {
     this.treasureMapEl = document.getElementById('treasure-map-indicator');
     this.portCrewHireEl = document.getElementById('port-crew-hire');
     this.captainsLogEl = document.getElementById('captains-log');
+    this.v2ResourcesEl = document.getElementById('v2-resources');
+    this.v2FactionEl = document.getElementById('v2-faction');
+    this.codexPanelEl = document.getElementById('codex-panel');
+    this.codexSummaryEl = document.getElementById('codex-summary');
+    this.codexSectionsEl = document.getElementById('codex-sections');
+    this.choicePanelEl = document.getElementById('choice-panel');
   }
 
   /* ------------------------------------------------------------------ */
@@ -613,7 +663,13 @@ export class UI {
   /*  WAVE PREVIEW                                                       */
   /* ------------------------------------------------------------------ */
 
-  showWavePreview(wave: number, weather: string, totalShips: number, armedPercent: number) {
+  showWavePreview(
+    wave: number,
+    weather: string,
+    totalShips: number,
+    armedPercent: number,
+    context?: { regionName?: string; nodeLabel?: string; factionName?: string },
+  ) {
     if (!this.wavePreview) {
       this.wavePreview = document.getElementById('wave-preview');
     }
@@ -629,6 +685,16 @@ export class UI {
     const emoji = weatherEmoji[weather] || '';
     const weatherLabel = weather.charAt(0).toUpperCase() + weather.slice(1);
 
+    const regionLine = context?.regionName
+      ? `<div style="font-size:13px;color:#9ec8ff;margin-top:4px;">${context.regionName}</div>`
+      : '';
+    const nodeLine = context?.nodeLabel
+      ? `<div style="font-size:12px;color:#cfd8e7;margin-top:2px;">${context.nodeLabel}</div>`
+      : '';
+    const factionLine = context?.factionName
+      ? `<div style="font-size:11px;color:#ffb7b7;margin-top:2px;">Pressure: ${context.factionName}</div>`
+      : '';
+
     this.wavePreview.innerHTML = `
       <div style="font-size:28px;font-weight:bold;letter-spacing:2px;margin-bottom:6px;">
         Wave ${wave}
@@ -636,6 +702,9 @@ export class UI {
       <div style="font-size:16px;color:#ccc;">
         ${emoji} ${weatherLabel} &mdash; ${totalShips} Ships &mdash; ${Math.round(armedPercent * 100)}% Armed
       </div>
+      ${regionLine}
+      ${nodeLine}
+      ${factionLine}
     `;
 
     this.wavePreview.style.display = 'flex';
@@ -812,7 +881,12 @@ export class UI {
     }>,
     onBuy: (id: string) => void,
     onRepair: (amount: number) => void,
-    onSetSail: () => void
+    onSetSail: () => void,
+    options?: {
+      repairCostPer10?: number;
+      marketTitle?: string;
+      marketNotes?: string[];
+    },
   ) {
     if (!this.portOverlay) {
       this.portOverlay = document.getElementById('port-overlay');
@@ -820,8 +894,23 @@ export class UI {
     if (!this.portOverlay) return;
 
     const hpPct = Math.max(0, Math.min(1, currentHp / maxHp)) * 100;
-    const repairCost = 100;
-    const fullRepairCost = Math.ceil((maxHp - currentHp) * 10);
+    const repairCost = Math.max(1, Math.round(options?.repairCostPer10 ?? 100));
+    const fullRepairCost = Math.ceil((maxHp - currentHp) / 10) * repairCost;
+    this.portRepairCostPer10 = repairCost;
+    const marketTitle = options?.marketTitle?.trim() || 'Harbor Market';
+    const marketNotes = options?.marketNotes ?? [];
+    const marketNotesHtml = marketNotes.length > 0
+      ? `
+          <div style="
+            margin:0 0 10px 0; padding:8px 10px;
+            border:1px solid rgba(255,215,0,0.18); border-radius:6px;
+            background:rgba(255,215,0,0.06); color:#e8d5a3;
+            font-size:12px; line-height:1.35;
+          ">
+            ${marketNotes.map(note => `<div>${note}</div>`).join('')}
+          </div>
+        `
+      : '';
 
     this.portOverlay.innerHTML = `
       <div style="
@@ -843,6 +932,11 @@ export class UI {
             border-radius:8px; padding:14px; display:flex; flex-direction:column;
           ">
             <h2 style="color:#ffd700;font-size:18px;margin:0 0 10px 0;text-align:center;">Shop</h2>
+            <div style="
+              color:rgba(255,235,180,0.92); font-size:12px; letter-spacing:0.04em;
+              text-transform:uppercase; margin-bottom:8px; text-align:center;
+            ">${marketTitle}</div>
+            ${marketNotesHtml}
             <div id="port-shop-list" style="
               flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px;
             "></div>
@@ -996,17 +1090,187 @@ export class UI {
   updatePortHealth(current: number, max: number) {
     const fill = document.getElementById('port-hp-fill');
     const text = document.getElementById('port-hp-text');
+    const repairBtn = document.getElementById('port-repair-btn');
+    const fullRepairBtn = document.getElementById('port-full-repair-btn');
     if (!fill || !text) return;
 
     const pct = Math.max(0, Math.min(1, current / max)) * 100;
     fill.style.width = `${pct}%`;
     fill.style.backgroundColor = pct > 60 ? '#4caf50' : pct > 30 ? '#ffeb3b' : '#f44336';
     text.textContent = `${current} / ${max} HP`;
+    if (repairBtn) {
+      repairBtn.textContent = `Repair 10 HP (${this.portRepairCostPer10}g)`;
+    }
+    if (fullRepairBtn) {
+      const needed = Math.max(0, max - current);
+      const fullRepairCost = Math.ceil(needed / 10) * this.portRepairCostPer10;
+      fullRepairBtn.textContent = `Full Repair (${fullRepairCost}g)`;
+    }
+  }
+
+  updateV2Resources(supplies: number, intel: number, reputationTokens: number): void {
+    if (this.screensaverMode) return;
+    if (!this.v2ResourcesEl) {
+      this.v2ResourcesEl = document.getElementById('v2-resources');
+    }
+    if (!this.v2ResourcesEl) return;
+
+    const text = `Supplies ${supplies} · Intel ${intel} · Tokens ${reputationTokens}`;
+    if (text === this.lastV2ResourcesText) return;
+    this.lastV2ResourcesText = text;
+    this.v2ResourcesEl.textContent = text;
+    this.v2ResourcesEl.style.opacity = '1';
+  }
+
+  updateV2FactionStatus(factionName: string | null, reputation: number): void {
+    if (this.screensaverMode) return;
+    if (!this.v2FactionEl) {
+      this.v2FactionEl = document.getElementById('v2-faction');
+    }
+    if (!this.v2FactionEl) return;
+
+    const standing = reputation >= 40
+      ? 'Friendly'
+      : reputation >= 15
+        ? 'Warm'
+        : reputation > -15
+          ? 'Wary'
+          : reputation > -40
+            ? 'Hostile'
+            : 'Vendetta';
+    const label = factionName ? `${factionName}: ${standing} (${Math.round(reputation)})` : 'Waters: Neutral';
+    if (label === this.lastV2FactionText) return;
+    this.lastV2FactionText = label;
+    this.v2FactionEl.textContent = label;
+    this.v2FactionEl.style.opacity = '1';
   }
 
   /* ------------------------------------------------------------------ */
-  /*  SHIP SELECT SCREEN                                                 */
+  /*  RUN SETUP / SHIP SELECT                                            */
   /* ------------------------------------------------------------------ */
+
+  showRunSetup(
+    configs: ShipClassConfig[],
+    doctrines: DoctrineSetupOption[],
+    defaults: { shipClass: ShipClass; doctrineId: string },
+    onStart: (shipClass: ShipClass, doctrineId: string) => void,
+  ): void {
+    if (!this.shipSelectEl) {
+      this.shipSelectEl = document.getElementById('ship-select');
+    }
+    if (!this.shipSelectEl) return;
+
+    let selectedShip: ShipClass = defaults.shipClass;
+    let selectedDoctrine = defaults.doctrineId;
+    if (!doctrines.some((d) => d.id === selectedDoctrine) && doctrines.length > 0) {
+      selectedDoctrine = doctrines[0].id;
+    }
+
+    this.shipSelectEl.innerHTML = `
+      <h2>Chart Yer Voyage</h2>
+      <div style="color:rgba(255,255,255,0.7);font-size:0.95rem;margin:-0.9rem 0 1.4rem 0;">Select vessel and doctrine before casting off.</div>
+      <div style="width:min(92vw,980px);display:flex;flex-direction:column;gap:16px;">
+        <section>
+          <div style="color:#ffd99a;font-size:1rem;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">Ship Frame</div>
+          <div id="run-setup-ships" style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;"></div>
+        </section>
+        <section>
+          <div style="color:#9fd6ff;font-size:1rem;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">Starting Doctrine</div>
+          <div id="run-setup-doctrines" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;"></div>
+        </section>
+        <div style="display:flex;justify-content:center;margin-top:4px;">
+          <button id="run-setup-start" type="button" style="
+            font-family:'Pirata One', cursive;
+            font-size:1.2rem;
+            color:#ffd700;
+            background:rgba(255,215,0,0.12);
+            border:2px solid rgba(255,215,0,0.45);
+            border-radius:8px;
+            padding:10px 28px;
+            letter-spacing:0.09em;
+            cursor:pointer;
+          ">Set Sail</button>
+        </div>
+      </div>
+    `;
+
+    const shipsHost = document.getElementById('run-setup-ships');
+    const doctrinesHost = document.getElementById('run-setup-doctrines');
+    const startBtn = document.getElementById('run-setup-start') as HTMLButtonElement | null;
+    if (!shipsHost || !doctrinesHost || !startBtn) return;
+
+    const renderShips = () => {
+      shipsHost.innerHTML = '';
+      for (const cfg of configs) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = `ship-card${cfg.locked ? ' locked' : ''}`;
+        const selected = cfg.id === selectedShip;
+        card.style.borderColor = selected ? '#ffd700' : 'rgba(255,215,0,0.3)';
+        card.style.boxShadow = selected ? '0 0 22px rgba(255, 205, 80, 0.32)' : '';
+
+        if (cfg.locked) {
+          card.innerHTML = `
+            <div class="ship-lock-icon">\uD83D\uDD12</div>
+            <div class="ship-icon">${cfg.icon}</div>
+            <div class="ship-name">${cfg.name}</div>
+            <div class="ship-stats">Locked</div>
+            <div class="ship-desc">${cfg.description}</div>
+          `;
+        } else {
+          card.innerHTML = `
+            <div class="ship-icon">${cfg.icon}</div>
+            <div class="ship-name">${cfg.name}</div>
+            <div class="ship-stats">
+              Speed: ${cfg.speed} &bull; HP: ${cfg.hp} &bull; Cannons: ${cfg.cannonsPerSide * 2}
+            </div>
+            <div class="ship-desc">${cfg.description}</div>
+          `;
+          card.addEventListener('click', () => {
+            selectedShip = cfg.id;
+            renderShips();
+          });
+        }
+        shipsHost.appendChild(card);
+      }
+    };
+
+    const renderDoctrines = () => {
+      doctrinesHost.innerHTML = '';
+      for (const doctrine of doctrines) {
+        const selected = doctrine.id === selectedDoctrine;
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.style.cssText = `
+          width: min(280px, 92vw);
+          text-align: left;
+          padding: 11px 12px;
+          background: ${selected ? 'rgba(70, 115, 166, 0.34)' : 'rgba(18, 24, 36, 0.85)'};
+          border: 1px solid ${selected ? '#8ac9ff' : 'rgba(110, 156, 202, 0.35)'};
+          border-radius: 8px;
+          color: #d9e8ff;
+          cursor: pointer;
+          font-family: 'Pirata One', cursive;
+          font-size: 0.95rem;
+        `;
+        card.innerHTML = `
+          <div style="font-size:1.08rem;color:#9fd6ff;letter-spacing:0.04em;">${doctrine.name}</div>
+          <div style="font-size:0.78rem;color:rgba(217,232,255,0.74);line-height:1.35;margin-top:4px;">${doctrine.summary}</div>
+          <div style="font-size:0.72rem;color:#d7f0ff;opacity:0.82;margin-top:6px;">${doctrine.bonusLabel}</div>
+        `;
+        card.addEventListener('click', () => {
+          selectedDoctrine = doctrine.id;
+          renderDoctrines();
+        });
+        doctrinesHost.appendChild(card);
+      }
+    };
+
+    renderShips();
+    renderDoctrines();
+    startBtn.addEventListener('click', () => onStart(selectedShip, selectedDoctrine), { once: true });
+    this.shipSelectEl.style.display = 'flex';
+  }
 
   showShipSelect(
     configs: ShipClassConfig[],
@@ -1164,11 +1428,251 @@ export class UI {
     }
   }
 
+  showChoicePrompt(
+    title: string,
+    detail: string,
+    options: ChoicePromptOption[],
+  ): Promise<string> {
+    if (!this.choicePanelEl) {
+      this.choicePanelEl = document.getElementById('choice-panel');
+    }
+    if (!this.choicePanelEl) {
+      return Promise.resolve(options[0]?.id ?? '');
+    }
+
+    this.choicePanelEl.innerHTML = `
+      <div class="choice-shell">
+        <h3>${title}</h3>
+        <p>${detail}</p>
+        <div class="choice-options">
+          ${options
+      .map((option, idx) => `
+              <button type="button" class="choice-option" data-choice-id="${option.id}">
+                <span class="choice-index">${idx + 1}</span>
+                <span class="choice-copy">
+                  <strong>${option.label}</strong>
+                  <em>${option.detail}</em>
+                </span>
+              </button>
+            `)
+      .join('')}
+        </div>
+      </div>
+    `;
+    this.choicePanelEl.style.display = 'flex';
+
+    return new Promise((resolve) => {
+      const buttons = this.choicePanelEl?.querySelectorAll<HTMLElement>('.choice-option') ?? [];
+      for (const btn of buttons) {
+        btn.addEventListener('click', () => {
+          const choiceId = btn.dataset.choiceId ?? options[0]?.id ?? '';
+          this.hideChoicePrompt();
+          resolve(choiceId);
+        }, { once: true });
+      }
+    });
+  }
+
+  hideChoicePrompt(): void {
+    if (!this.choicePanelEl) {
+      this.choicePanelEl = document.getElementById('choice-panel');
+    }
+    if (!this.choicePanelEl) return;
+    this.choicePanelEl.style.display = 'none';
+    this.choicePanelEl.innerHTML = '';
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  CODEX                                                              */
+  /* ------------------------------------------------------------------ */
+
+  showCodex(view: CodexViewModel): void {
+    if (!this.codexPanelEl) {
+      this.codexPanelEl = document.getElementById('codex-panel');
+    }
+    if (!this.codexSummaryEl) {
+      this.codexSummaryEl = document.getElementById('codex-summary');
+    }
+    if (!this.codexSectionsEl) {
+      this.codexSectionsEl = document.getElementById('codex-sections');
+    }
+    if (!this.codexPanelEl || !this.codexSummaryEl || !this.codexSectionsEl) return;
+
+    const sectionOptions = view.sections
+      .map((section) => `<option value="${section.title.toLowerCase()}">${section.title}</option>`)
+      .join('');
+
+    this.codexSummaryEl.innerHTML = `
+      <div class="codex-progress">
+        <div class="codex-progress-fill" style="width:${Math.max(0, Math.min(100, view.completionPct))}%;"></div>
+      </div>
+      <div class="codex-progress-label">${view.discovered} / ${view.total} entries discovered (${view.completionPct}%)</div>
+      <div style="display:grid;grid-template-columns:minmax(140px,1fr) auto auto;gap:8px;margin-top:10px;">
+        <input
+          id="codex-filter-search"
+          type="text"
+          placeholder="Search codex..."
+          style="background:rgba(10,16,24,0.9);color:#dfe8f8;border:1px solid rgba(95,126,170,0.55);border-radius:6px;padding:8px 10px;font-size:13px;"
+        />
+        <select id="codex-filter-visibility" style="background:rgba(10,16,24,0.9);color:#dfe8f8;border:1px solid rgba(95,126,170,0.55);border-radius:6px;padding:8px 10px;font-size:12px;">
+          <option value="all">All</option>
+          <option value="unlocked">Unlocked</option>
+          <option value="locked">Locked</option>
+        </select>
+        <select id="codex-filter-section" style="background:rgba(10,16,24,0.9);color:#dfe8f8;border:1px solid rgba(95,126,170,0.55);border-radius:6px;padding:8px 10px;font-size:12px;">
+          <option value="all">All Sections</option>
+          ${sectionOptions}
+        </select>
+      </div>
+      <div id="codex-filter-count" style="margin-top:8px;font-size:11px;color:rgba(199,214,236,0.85);"></div>
+    `;
+
+    this.codexSectionsEl.innerHTML = view.sections
+      .map(section => `
+        <section class="codex-section" data-section="${section.title.toLowerCase()}">
+          <header>
+            <h3>${section.title}</h3>
+            <span>${section.discovered}/${section.total}</span>
+          </header>
+          <div class="codex-entry-list">
+            ${section.entries
+      .map(entry => `
+                <article
+                  class="codex-entry${entry.unlocked ? ' unlocked' : ' locked'}"
+                  data-codex-id="${entry.id}"
+                  data-codex-unlocked="${entry.unlocked ? '1' : '0'}"
+                  data-codex-search="${encodeURIComponent(`${entry.name} ${entry.detail}`.toLowerCase())}"
+                >
+                  <div class="codex-entry-name">${entry.unlocked ? entry.name : 'Unknown Entry'}</div>
+                  <div class="codex-entry-detail">${entry.unlocked ? entry.detail : 'Discover this by sailing further.'}</div>
+                </article>
+              `)
+      .join('')}
+          </div>
+        </section>
+      `)
+      .join('');
+
+    const searchInput = document.getElementById('codex-filter-search') as HTMLInputElement | null;
+    const visibilityFilter = document.getElementById('codex-filter-visibility') as HTMLSelectElement | null;
+    const sectionFilter = document.getElementById('codex-filter-section') as HTMLSelectElement | null;
+    const countEl = document.getElementById('codex-filter-count');
+    const applyFilters = () => {
+      const query = (searchInput?.value ?? '').trim().toLowerCase();
+      const visibility = visibilityFilter?.value ?? 'all';
+      const activeSection = sectionFilter?.value ?? 'all';
+      let visibleEntries = 0;
+
+      const sections = this.codexSectionsEl?.querySelectorAll<HTMLElement>('.codex-section') ?? [];
+      for (const section of sections) {
+        const sectionId = section.dataset.section ?? '';
+        const inSectionScope = activeSection === 'all' || sectionId === activeSection;
+        let visibleInSection = 0;
+        const entries = section.querySelectorAll<HTMLElement>('.codex-entry');
+        for (const entry of entries) {
+          const unlocked = entry.dataset.codexUnlocked === '1';
+          const searchRaw = entry.dataset.codexSearch ?? '';
+          const searchBlob = decodeURIComponent(searchRaw);
+          const queryMatch = query.length === 0 || searchBlob.includes(query);
+          const visibilityMatch = visibility === 'all'
+            || (visibility === 'unlocked' && unlocked)
+            || (visibility === 'locked' && !unlocked);
+          const visible = inSectionScope && queryMatch && visibilityMatch;
+          entry.style.display = visible ? '' : 'none';
+          if (visible) {
+            visibleInSection++;
+            visibleEntries++;
+          }
+        }
+        section.style.display = visibleInSection > 0 ? '' : 'none';
+      }
+
+      if (countEl) {
+        countEl.textContent = `${visibleEntries} entries shown`;
+      }
+    };
+
+    searchInput?.addEventListener('input', applyFilters);
+    visibilityFilter?.addEventListener('change', applyFilters);
+    sectionFilter?.addEventListener('change', applyFilters);
+    applyFilters();
+
+    this.codexPanelEl.style.display = 'flex';
+  }
+
+  showCodexDiscoverySpotlight(title: string): void {
+    const host = document.getElementById('ui') ?? document.body;
+    let toast = document.getElementById('codex-discovery-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'codex-discovery-toast';
+      toast.style.cssText = `
+        position:fixed;
+        top:18%;
+        left:50%;
+        transform:translate(-50%, -8px);
+        pointer-events:none;
+        background:rgba(10, 18, 34, 0.95);
+        border:1px solid rgba(126, 183, 242, 0.65);
+        border-radius:10px;
+        padding:10px 14px;
+        min-width:min(86vw, 380px);
+        text-align:center;
+        z-index:145;
+        opacity:0;
+        transition:opacity 0.25s ease, transform 0.25s ease;
+        box-shadow:0 14px 30px rgba(0,0,0,0.45);
+      `;
+      host.appendChild(toast);
+    }
+
+    toast.innerHTML = `
+      <div style="font-size:0.7rem;letter-spacing:0.09em;text-transform:uppercase;color:rgba(158,206,255,0.78);">Codex Discovery</div>
+      <div style="font-size:1rem;color:#d4e7ff;margin-top:4px;">${title}</div>
+    `;
+
+    if (this.codexDiscoveryTimeout) clearTimeout(this.codexDiscoveryTimeout);
+    toast.style.opacity = '1';
+    toast.style.transform = 'translate(-50%, 0)';
+    this.codexDiscoveryTimeout = setTimeout(() => {
+      toast!.style.opacity = '0';
+      toast!.style.transform = 'translate(-50%, -8px)';
+    }, 2400);
+  }
+
+  hideCodex(): void {
+    if (!this.codexPanelEl) {
+      this.codexPanelEl = document.getElementById('codex-panel');
+    }
+    if (this.codexPanelEl) {
+      this.codexPanelEl.style.display = 'none';
+    }
+  }
+
+  onCodexClose(callback: () => void): void {
+    const closeBtn = document.getElementById('codex-close');
+    if (!closeBtn) return;
+    const newBtn = closeBtn.cloneNode(true) as HTMLElement;
+    closeBtn.parentNode?.replaceChild(newBtn, closeBtn);
+    newBtn.addEventListener('click', callback, { once: true });
+  }
+
   /* ------------------------------------------------------------------ */
   /*  RUN SUMMARY / VICTORY                                              */
   /* ------------------------------------------------------------------ */
 
-  showRunSummary(stats: RunStats, unlocks: string[]): void {
+  showRunSummary(
+    stats: RunStats,
+    unlocks: string[],
+    v2Meta?: {
+      codexCount?: number;
+      hostileFactionId?: string | null;
+      hostileFactionScore?: number | null;
+      alliedFactionId?: string | null;
+      alliedFactionScore?: number | null;
+      doctrineName?: string | null;
+    },
+  ): void {
     if (!this.runSummaryEl) {
       this.runSummaryEl = document.getElementById('run-summary');
     }
@@ -1206,6 +1710,33 @@ export class UI {
         ['Time Played', timeStr],
         ['Ship Class', stats.shipClass.charAt(0).toUpperCase() + stats.shipClass.slice(1)],
       ];
+
+      if (typeof v2Meta?.codexCount === 'number') {
+        rows.push(['Codex Entries', String(v2Meta.codexCount)]);
+      }
+      if (v2Meta?.doctrineName) {
+        rows.push(['Doctrine', v2Meta.doctrineName]);
+      }
+      if (v2Meta?.hostileFactionId) {
+        const hostileName = v2Meta.hostileFactionId
+          .split('_')
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' ');
+        rows.push([
+          'Most Hostile Faction',
+          `${hostileName} (${Math.round(v2Meta.hostileFactionScore ?? 0)})`,
+        ]);
+      }
+      if (v2Meta?.alliedFactionId) {
+        const alliedName = v2Meta.alliedFactionId
+          .split('_')
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' ');
+        rows.push([
+          'Most Allied Faction',
+          `${alliedName} (${Math.round(v2Meta.alliedFactionScore ?? 0)})`,
+        ]);
+      }
 
       statsEl.innerHTML = rows
         .map(

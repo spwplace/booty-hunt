@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "analyze:telemetry": "node scripts/analyze-telemetry.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"

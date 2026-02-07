@@ -374,4 +374,7 @@ export interface SaveDataV1 {
   musicVolume: number;
   sfxVolume: number;
   graphicsQuality: 'low' | 'medium' | 'high';
+  // V2 meta progression
+  v2CodexDiscovered: string[];
+  v2FactionReputation: Record<string, number>;
 }

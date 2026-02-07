@@ -1,0 +1,52 @@
+[
+  {
+    "id": "ember_shoals",
+    "name": "Ember Shoals",
+    "theme": "Volcanic trade routes lit by ashfall sunsets.",
+    "weatherBias": ["clear", "stormy"],
+    "hazards": ["fire_reef", "ash_fog"],
+    "factionPressure": ["redwake_corsairs", "merchant_consortium"],
+    "eventDeckBias": ["burning_armada", "smuggler_convoy"],
+    "musicMood": "tense_percussion"
+  },
+  {
+    "id": "mourning_expanse",
+    "name": "Mourning Expanse",
+    "theme": "Ghost-haunted waters where fog swallows horizons.",
+    "weatherBias": ["foggy", "night"],
+    "hazards": ["phantom_current", "grave_fog"],
+    "factionPressure": ["wraith_fleet"],
+    "eventDeckBias": ["toll_of_the_dead", "phantom_ambush"],
+    "musicMood": "ethereal_drones"
+  },
+  {
+    "id": "crownwater_reach",
+    "name": "Crownwater Reach",
+    "theme": "Imperial naval lanes under constant patrol.",
+    "weatherBias": ["clear", "foggy"],
+    "hazards": ["mine_chain", "patrol_net"],
+    "factionPressure": ["imperial_navy"],
+    "eventDeckBias": ["flagship_interdiction", "tax_levy"],
+    "musicMood": "martial_brass"
+  },
+  {
+    "id": "verdant_mael",
+    "name": "Verdant Mael",
+    "theme": "Jungle archipelago of serpents and hidden ruins.",
+    "weatherBias": ["stormy", "night"],
+    "hazards": ["serpent_nest", "storm_wall"],
+    "factionPressure": ["free_captains", "merchant_consortium"],
+    "eventDeckBias": ["idol_of_the_deep", "jungle_relic"],
+    "musicMood": "tribal_strings"
+  },
+  {
+    "id": "leviathan_deep",
+    "name": "Leviathan Deep",
+    "theme": "Abyssal frontier with colossal swells and ancient beasts.",
+    "weatherBias": ["stormy", "night"],
+    "hazards": ["abyss_vent", "mega_swell"],
+    "factionPressure": ["wraith_fleet", "imperial_navy"],
+    "eventDeckBias": ["leviathan_hunt", "deep_pressure"],
+    "musicMood": "sub_bass_dread"
+  }
+]
