@@ -679,16 +679,62 @@ const BOUNCE_STRENGTH = 8;
 
 const ISLAND_TYPES: IslandType[] = ['rocky', 'sandy', 'jungle', 'fortress'];
 
+const ISLAND_NAME_PARTS: Record<IslandType, { prefixes: string[]; suffixes: string[] }> = {
+  rocky: {
+    prefixes: ['Shatter', 'Iron', 'Skull', 'Widow', 'Grim', 'Razor', 'Dread'],
+    suffixes: ['Reef', 'Spire', 'Tooth', 'Crag', 'Shelf', 'Point', 'Scar'],
+  },
+  sandy: {
+    prefixes: ['Sun', 'Gold', 'Coral', 'Drift', 'Rum', 'Palm', 'Lagoon'],
+    suffixes: ['Cay', 'Sands', 'Atoll', 'Shoal', 'Haven', 'Reach', 'Bay'],
+  },
+  jungle: {
+    prefixes: ['Serpent', 'Emerald', 'Howler', 'Moss', 'Viper', 'Verdant', 'Ivory'],
+    suffixes: ['Isle', 'Canopy', 'Thicket', 'Basin', 'Grove', 'Cove', 'Wilds'],
+  },
+  fortress: {
+    prefixes: ['Black', 'Admiral', 'Cannon', 'Bastion', 'King', 'Gallows', 'Corsair'],
+    suffixes: ['Keep', 'Watch', 'Hold', 'Bastion', 'Fort', 'Gate', 'Roost'],
+  },
+};
+
+const REGION_PREFIXES = [
+  'Shattered', 'Bleak', 'Tempest', 'Gilded', 'Forgotten', 'Blood', 'Whispering',
+];
+const REGION_SUFFIXES = [
+  'Shoals', 'Expanse', 'Reach', 'Frontier', 'Sea', 'Current', 'Straits',
+];
+
+function seededIndex(seed: number, salt: number, length: number): number {
+  const value = (seed >>> 0) ^ ((salt * 0x9E3779B1) >>> 0);
+  return value % length;
+}
+
+function generateIslandName(type: IslandType, seed: number): string {
+  const parts = ISLAND_NAME_PARTS[type];
+  const prefix = parts.prefixes[seededIndex(seed, 17, parts.prefixes.length)];
+  const suffix = parts.suffixes[seededIndex(seed, 53, parts.suffixes.length)];
+  return `${prefix} ${suffix}`;
+}
+
+function generateRegionName(seed: number): string {
+  const prefix = REGION_PREFIXES[seededIndex(seed, 11, REGION_PREFIXES.length)];
+  const suffix = REGION_SUFFIXES[seededIndex(seed, 73, REGION_SUFFIXES.length)];
+  return `The ${prefix} ${suffix}`;
+}
+
 export class WorldSystem {
   islands: Island[] = [];
   private scene: THREE.Scene;
   private rng: () => number;
   private worldSeed: number;
+  private regionName: string;
 
   constructor(scene: THREE.Scene, seed?: number) {
     this.scene = scene;
     this.worldSeed = seed ?? Math.floor(Math.random() * 0xFFFFFFFF);
     this.rng = mulberry32(this.worldSeed);
+    this.regionName = generateRegionName(this.worldSeed);
     this.generateIslands();
   }
 
@@ -701,6 +747,7 @@ export class WorldSystem {
     this.dispose();
     this.islands = [];
     this.rng = mulberry32(this.worldSeed);
+    const usedNames = new Set<string>();
 
     const count = 8 + Math.floor(this.rng() * 8); // 8-15
 
@@ -738,9 +785,18 @@ export class WorldSystem {
       const reefRadius = radius * config.reefMultiplier;
       const hasTreasure = this.rng() < config.treasureChance;
       const seed = Math.floor(this.rng() * 0xFFFFFFFF);
+      const baseName = generateIslandName(type, seed);
+      let name = baseName;
+      let duplicateIndex = 2;
+      while (usedNames.has(name)) {
+        name = `${baseName} ${duplicateIndex}`;
+        duplicateIndex++;
+      }
+      usedNames.add(name);
 
       const island: Island = {
         type,
+        name,
         pos: new THREE.Vector3(px, ISLAND_BASE_Y, pz),
         radius,
         reefRadius,
@@ -879,6 +935,10 @@ export class WorldSystem {
 
   getIslands(): Island[] {
     return this.islands;
+  }
+
+  getRegionName(): string {
+    return this.regionName;
   }
 
   /** Return reef position data suitable for the Ocean shader uniforms. */

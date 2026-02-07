@@ -13,6 +13,7 @@ import { UI } from './UI';
 import { audio } from './Audio';
 import { CombatSystem } from './Combat';
 import { WeatherSystem } from './Weather';
+import type { WeatherState } from './Weather';
 import { ProgressionSystem } from './Progression';
 import type { PlayerStats, Synergy } from './Progression';
 import { screenJuice } from './Juice';
@@ -23,7 +24,7 @@ import { EnemyAISystem } from './EnemyAI';
 import { CrewSystem } from './Crew';
 import { EventSystem } from './Events';
 import { TutorialSystem } from './Tutorial';
-import type { MerchantV1, WaveConfigV1, EnemyType, RunStats } from './Types';
+import type { MerchantV1, WaveConfigV1, EnemyType, RunStats, EventType } from './Types';
 import { ENEMY_TYPE_CONFIGS, CREW_ROLE_CONFIGS } from './Types';
 import { DevPanel } from './DevPanel';
 
@@ -217,6 +218,81 @@ const PIRATE_NAMES = [
   'The Reaper', 'Barnacle Bill', 'Storm Fang', 'Dread Morgan',
 ];
 
+const WEATHER_LOG_LINES: Record<WeatherState, string> = {
+  clear: 'clear water and wide horizons',
+  foggy: 'fogbanks thick enough to hide a broadside',
+  stormy: 'black swells and thunder off the bow',
+  night: 'moonlit currents and lantern-lit wakes',
+};
+
+const EVENT_START_LOG: Record<EventType, { message: string; tone: 'warning' | 'mystic' | 'neutral' | 'reward' }> = {
+  kraken: { message: 'The sea is boiling. Kraken limbs off both beams!', tone: 'warning' },
+  whirlpool: { message: 'A spinning maw forms ahead. Helm hard over.', tone: 'warning' },
+  ghost_ship_event: { message: 'A phantom silhouette rises from the fog.', tone: 'mystic' },
+  sea_serpent: { message: 'The serpent circles. Keep distance and survive.', tone: 'warning' },
+  storm_surge: { message: 'Storm surge incoming. Build speed now.', tone: 'warning' },
+  treasure_map: { message: 'A blood-stained chart points toward buried coin.', tone: 'reward' },
+};
+
+const EVENT_END_LOG: Record<EventType, { success: string; failure?: string; successTone: 'reward' | 'neutral'; failureTone?: 'warning' | 'neutral' }> = {
+  kraken: {
+    success: 'Kraken driven off. The crew cheers over shattered tentacles.',
+    failure: 'The kraken vanished below and left the hull groaning.',
+    successTone: 'reward',
+    failureTone: 'warning',
+  },
+  whirlpool: {
+    success: 'The vortex fades and the current settles.',
+    successTone: 'neutral',
+  },
+  ghost_ship_event: {
+    success: 'The ghostly wake thins into mist.',
+    successTone: 'neutral',
+  },
+  sea_serpent: {
+    success: 'The serpent dives deep. These waters are ours for now.',
+    failure: 'The serpent left splintered planks in its wake.',
+    successTone: 'reward',
+    failureTone: 'warning',
+  },
+  storm_surge: {
+    success: 'You rode the surge clean and kept command.',
+    failure: 'The surge slammed the hull broadside.',
+    successTone: 'reward',
+    failureTone: 'warning',
+  },
+  treasure_map: {
+    success: 'Treasure secured and stowed below deck.',
+    successTone: 'reward',
+  },
+};
+
+function getWaveLogLine(config: WaveConfigV1): string {
+  const weatherLine = WEATHER_LOG_LINES[config.weather];
+  if (config.bossName) {
+    return `Wave ${config.wave}: ${weatherLine}. ${config.bossName} commands the enemy line.`;
+  }
+  return `Wave ${config.wave}: ${weatherLine}. ${config.totalShips} ships on the horizon.`;
+}
+
+function announceEventStart(type: EventType): void {
+  const entry = EVENT_START_LOG[type];
+  if (!entry) return;
+  ui.showCaptainLog(entry.message, entry.tone);
+}
+
+function announceEventEnd(type: EventType, success: boolean): void {
+  const entry = EVENT_END_LOG[type];
+  if (!entry) return;
+  if (success) {
+    ui.showCaptainLog(entry.success, entry.successTone);
+    return;
+  }
+  if (entry.failure) {
+    ui.showCaptainLog(entry.failure, entry.failureTone ?? 'warning');
+  }
+}
+
 // Track active wave config (V1 with enemy types + boss info)
 let activeWaveConfigV1: WaveConfigV1 | null = null;
 let currentBoss: MerchantV1 | null = null;
@@ -288,6 +364,7 @@ function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
     const bossName = waveConfig.bossName ?? `Captain ${PIRATE_NAMES[Math.floor(Math.random() * PIRATE_NAMES.length)]}`;
     ui.showBossHealthBar(bossName);
     ui.updateBossHealth(m.hp, m.maxHp);
+    ui.showCaptainLog(`Enemy flagship sighted: ${bossName}.`, 'warning');
     audio.playBossWarning();
     audio.setBossMode(true);
   }
@@ -313,6 +390,8 @@ let tutorialMoved = false;
 let tutorialFired = false;
 let tutorialCaptured = false;
 let tutorialUpgraded = false;
+let islandDiscoveryScanTimer = 0;
+const discoveredIslandSeeds = new Set<number>();
 
 // Screensaver mode
 let lastIsNight = false;
@@ -563,6 +642,7 @@ function startScreensaver() {
   screensaverWeatherIndex = 0;
   screensaverSpawnTimer = 0;
   ui.screensaverMode = true;
+  ui.clearCaptainLog();
 
   audio.init();
 
@@ -800,6 +880,10 @@ function startGame() {
   world.generateIslands();
   const reefData = world.getReefData();
   ocean.setReefPositions(reefData);
+  discoveredIslandSeeds.clear();
+  islandDiscoveryScanTimer = 0;
+  ui.clearCaptainLog();
+  ui.showCaptainLog(`We set course for ${world.getRegionName()}.`, 'neutral');
 
   // Start tutorial for new players
   tutorial.start();
@@ -842,9 +926,10 @@ function beginWave() {
   );
 
   // Wave announcement
-  ui.showWaveAnnouncement(config.wave);
+  ui.showWaveAnnouncement(config.wave, config.bossName !== null);
   waveAnnouncePending = true;
   waveAnnounceTimer = 1.5;
+  ui.showCaptainLog(getWaveLogLine(config), config.bossName ? 'warning' : 'neutral');
 
   // Weather transition
   weather.transitionTo(config.weather, config.wave === 1 ? 1 : 10);
@@ -987,6 +1072,7 @@ function rebuildPlayerShip() {
 function enterPort() {
   gamePaused = true;
   inPort = true;
+  ui.showCaptainLog('Dropping anchor at Port Royal for repairs and rumors.', 'neutral');
   audio.setPortMode(true);
   audio.playPortAmbience();
 
@@ -1102,6 +1188,7 @@ function enterPort() {
 function leavePort() {
   ui.hidePortUI();
   ui.hidePortCrewHire();
+  ui.showCaptainLog('Anchor up. Crew aboard. Back to open water.', 'neutral');
   audio.stopPortAmbience();
   audio.setPortMode(false);
 
@@ -1172,6 +1259,10 @@ function restartGame() {
   tutorialFired = false;
   tutorialCaptured = false;
   tutorialUpgraded = false;
+  islandDiscoveryScanTimer = 0;
+  discoveredIslandSeeds.clear();
+  ui.clearCaptainLog();
+  ui.showCaptainLog(`Back through ${world.getRegionName()} we sail.`, 'neutral');
 
   // Clean up effects
   krakenTentacle.dispose();
@@ -1408,7 +1499,7 @@ function updateMerchants(dt: number) {
   const weatherIntensity = weatherCfg.windIntensity;
 
   // Minimap entity list
-  const minimapEntities: Array<{x: number, z: number, type: 'merchant' | 'escort' | 'boss'}> = [];
+  const minimapEntities: Array<{x: number, z: number, type: 'merchant' | 'escort' | 'boss' | 'island'}> = [];
 
   // Update formations for navy warships
   EnemyAISystem.updateFormation(merchants);
@@ -1589,7 +1680,7 @@ function updateMerchants(dt: number) {
   for (const island of world.getIslands()) {
     minimapEntities.push({
       x: island.pos.x, z: island.pos.z,
-      type: 'merchant' as const, // reuse merchant color for islands
+      type: 'island' as const,
     });
   }
 
@@ -1684,6 +1775,7 @@ function triggerCapture(m: MerchantV1, _index: number) {
     if (islands.length > 0) {
       events.startEvent('treasure_map', playerPos, islands.length);
       ui.showTreasureMapIndicator();
+      announceEventStart('treasure_map');
     }
   }
 
@@ -1890,6 +1982,26 @@ function updateWorld(dt: number) {
   // Update animated island elements (fortress flags)
   world.updateAnimations(time, weather.getCurrentConfig().windIntensity);
 
+  // Log newly discovered landmarks near the player
+  islandDiscoveryScanTimer -= dt;
+  if (islandDiscoveryScanTimer <= 0) {
+    islandDiscoveryScanTimer = 0.6;
+    let discoveredThisTick = false;
+    for (const island of world.getIslands()) {
+      if (discoveredIslandSeeds.has(island.seed)) continue;
+      const dx = playerPos.x - island.pos.x;
+      const dz = playerPos.z - island.pos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist <= 55) {
+        discoveredIslandSeeds.add(island.seed);
+        const typeLabel = island.type.charAt(0).toUpperCase() + island.type.slice(1);
+        ui.showCaptainLog(`Landmark charted: ${island.name} (${typeLabel} isle).`, 'neutral');
+        discoveredThisTick = true;
+      }
+      if (discoveredThisTick) break;
+    }
+  }
+
   // Check island collision and reef damage
   const collision = world.checkCollision(playerPos, dt);
   if (collision.bounceDir) {
@@ -1913,11 +2025,13 @@ function updateWorld(dt: number) {
     const treasureGold = 200 + Math.floor(Math.random() * 600);
     progression.addScore(treasureGold);
     ui.showCapture(`+${treasureGold} Treasure!`, 1);
+    ui.showCaptainLog(`We dug up ${treasureGold} gold at ${digIsland.name}.`, 'reward');
     goldBurst.emit(playerPos, 50);
     audio.playCoinJingle(3);
     world.collectTreasure(digIsland);
     events.clearTreasureMap();
     ui.hideTreasureMapIndicator();
+    announceEventEnd('treasure_map', true);
   }
 
   // Sparkle effect on nearby treasure islands
@@ -1946,6 +2060,7 @@ function updateEvents(dt: number) {
     const eventType = events.rollForEvent(waveNum, weatherState);
     if (eventType) {
       events.startEvent(eventType, playerPos, world.getIslands().length);
+      announceEventStart(eventType);
 
       // Spawn event-specific effects
       const evt = events.getCurrentEvent();
@@ -2009,6 +2124,7 @@ function updateEvents(dt: number) {
   }
 
   const currentEvt = events.getCurrentEvent();
+  const activeEventType = currentEvt?.type ?? null;
   if (currentEvt && currentEvt.active) {
     ui.showEventTimer(
       currentEvt.type,
@@ -2040,6 +2156,10 @@ function updateEvents(dt: number) {
 
   // Event completed
   if (result.eventComplete) {
+    if (activeEventType) {
+      const success = result.goldReward > 0 || result.damageToPlayer <= 0;
+      announceEventEnd(activeEventType, success);
+    }
     ui.hideEventWarning();
     ui.hideEventTimer();
     krakenTentacle.dispose();

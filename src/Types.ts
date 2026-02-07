@@ -249,6 +249,7 @@ export type IslandType = 'rocky' | 'sandy' | 'jungle' | 'fortress';
 
 export interface Island {
   type: IslandType;
+  name: string;
   pos: THREE.Vector3;
   radius: number;
   reefRadius: number;

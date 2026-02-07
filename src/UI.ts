@@ -1,5 +1,12 @@
 import type { ShipClass, ShipClassConfig, RunStats } from './Types';
 
+type CaptainLogTone = 'neutral' | 'warning' | 'reward' | 'mystic';
+
+interface CaptainLogEntry {
+  message: string;
+  tone: CaptainLogTone;
+}
+
 export class UI {
   private titleEl: HTMLElement;
   private scoreEl: HTMLElement;
@@ -97,6 +104,11 @@ export class UI {
   private lastEventTimerPct: number = -1;
   private treasureMapEl: HTMLElement | null = null;
   private portCrewHireEl: HTMLElement | null = null;
+  private captainsLogEl: HTMLElement | null = null;
+  private captainLogQueue: CaptainLogEntry[] = [];
+  private captainLogTimeout: ReturnType<typeof setTimeout> | null = null;
+  private captainLogBusy = false;
+  private lastCaptainLog = '';
 
   // Screensaver mode: when true, gameplay UI updates are no-ops
   screensaverMode = false;
@@ -158,6 +170,7 @@ export class UI {
     this.eventTimerEl = document.getElementById('event-timer');
     this.treasureMapEl = document.getElementById('treasure-map-indicator');
     this.portCrewHireEl = document.getElementById('port-crew-hire');
+    this.captainsLogEl = document.getElementById('captains-log');
   }
 
   /* ------------------------------------------------------------------ */
@@ -268,7 +281,7 @@ export class UI {
   /*  WAVE DISPLAY                                                       */
   /* ------------------------------------------------------------------ */
 
-  showWaveAnnouncement(wave: number) {
+  showWaveAnnouncement(wave: number, isBossWave = false) {
     if (!this.waveAnnounce) return;
 
     // Clear any previous announcement timer
@@ -277,11 +290,10 @@ export class UI {
       this.waveAnnounceTimeout = null;
     }
 
-    const isBoss = wave % 5 === 0;
-    const label = isBoss ? `WAVE ${wave} - BOSS WAVE!` : `WAVE ${wave}`;
+    const label = isBossWave ? `WAVE ${wave} - BOSS WAVE!` : `WAVE ${wave}`;
 
     this.waveAnnounce.textContent = label;
-    this.waveAnnounce.style.color = isBoss ? '#f44336' : '';
+    this.waveAnnounce.style.color = isBossWave ? '#f44336' : '';
 
     // Fade in
     this.waveAnnounce.classList.add('show');
@@ -646,7 +658,7 @@ export class UI {
   updateMinimap(
     playerPos: { x: number; z: number },
     playerAngle: number,
-    entities: Array<{ x: number; z: number; type: 'merchant' | 'escort' | 'boss' }>,
+    entities: Array<{ x: number; z: number; type: 'merchant' | 'escort' | 'boss' | 'island' }>,
     cursedCompass = false,
   ) {
     if (this.screensaverMode) return;
@@ -700,7 +712,10 @@ export class UI {
         const clampDist = cx - 6;
         const angle = Math.atan2(ey - cy, ex - cx);
         // Draw as small indicator at edge -- handled below with clamped coords
-        ctx.fillStyle = e.type === 'boss' ? '#ff1744' : e.type === 'escort' ? '#ff6666' : '#ffffff';
+        if (e.type === 'boss') ctx.fillStyle = '#ff1744';
+        else if (e.type === 'escort') ctx.fillStyle = '#ff6666';
+        else if (e.type === 'island') ctx.fillStyle = '#c6ad7f';
+        else ctx.fillStyle = '#ffffff';
         ctx.globalAlpha = 0.5;
         ctx.beginPath();
         ctx.arc(cx + Math.cos(angle) * clampDist, cy + Math.sin(angle) * clampDist, 2, 0, Math.PI * 2);
@@ -718,6 +733,11 @@ export class UI {
         ctx.fillStyle = '#ff5252';
         ctx.beginPath();
         ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (e.type === 'island') {
+        ctx.fillStyle = 'rgba(198, 173, 127, 0.9)';
+        ctx.beginPath();
+        ctx.arc(ex, ey, 2.2, 0, Math.PI * 2);
         ctx.fill();
       } else {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
@@ -1319,7 +1339,15 @@ export class UI {
     }
 
     this.eventTimerEl.style.display = 'block';
-    this.eventTimerNameEl!.textContent = eventName;
+    const EVENT_LABELS: Record<string, string> = {
+      kraken: 'Kraken Assault',
+      whirlpool: 'Whirlpool',
+      ghost_ship_event: 'Ghost Ship',
+      sea_serpent: 'Sea Serpent',
+      storm_surge: 'Storm Surge',
+      treasure_map: 'Treasure Map',
+    };
+    this.eventTimerNameEl!.textContent = EVENT_LABELS[eventName] ?? eventName;
 
     const countdownSec = Math.ceil(remaining);
     if (countdownSec !== this.lastEventTimerSec) {
@@ -1366,6 +1394,66 @@ export class UI {
     if (this.treasureMapEl) {
       this.treasureMapEl.style.display = 'none';
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  CAPTAIN'S LOG                                                      */
+  /* ------------------------------------------------------------------ */
+
+  showCaptainLog(message: string, tone: CaptainLogTone = 'neutral'): void {
+    if (this.screensaverMode) return;
+    const text = message.trim();
+    if (!text) return;
+    if (text === this.lastCaptainLog && this.captainLogQueue.length === 0) return;
+
+    this.captainLogQueue.push({ message: text, tone });
+    this.flushCaptainLogQueue();
+  }
+
+  clearCaptainLog(): void {
+    this.captainLogQueue = [];
+    this.captainLogBusy = false;
+    if (this.captainLogTimeout) {
+      clearTimeout(this.captainLogTimeout);
+      this.captainLogTimeout = null;
+    }
+    if (!this.captainsLogEl) {
+      this.captainsLogEl = document.getElementById('captains-log');
+    }
+    if (!this.captainsLogEl) return;
+    this.captainsLogEl.classList.remove('show', 'tone-warning', 'tone-reward', 'tone-mystic');
+  }
+
+  private flushCaptainLogQueue(): void {
+    if (this.captainLogBusy) return;
+    if (this.captainLogQueue.length === 0) return;
+
+    if (!this.captainsLogEl) {
+      this.captainsLogEl = document.getElementById('captains-log');
+    }
+    if (!this.captainsLogEl) return;
+
+    const entry = this.captainLogQueue.shift();
+    if (!entry) return;
+
+    this.captainLogBusy = true;
+    this.lastCaptainLog = entry.message;
+    this.captainsLogEl.textContent = `Captain's Log: ${entry.message}`;
+    this.captainsLogEl.classList.remove('tone-warning', 'tone-reward', 'tone-mystic');
+    if (entry.tone === 'warning') this.captainsLogEl.classList.add('tone-warning');
+    else if (entry.tone === 'reward') this.captainsLogEl.classList.add('tone-reward');
+    else if (entry.tone === 'mystic') this.captainsLogEl.classList.add('tone-mystic');
+
+    this.captainsLogEl.classList.add('show');
+
+    this.captainLogTimeout = setTimeout(() => {
+      if (!this.captainsLogEl) return;
+      this.captainsLogEl.classList.remove('show');
+      this.captainLogTimeout = setTimeout(() => {
+        this.captainLogBusy = false;
+        this.flushCaptainLogQueue();
+      }, 280);
+    }, 3200);
   }
 
   /* ------------------------------------------------------------------ */
