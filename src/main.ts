@@ -1151,7 +1151,7 @@ function updateContractObjectiveTargetLabel(objective: ActiveContractObjective):
     return;
   }
   objective.target = Math.round(objective.target);
-  objective.targetLabel = `${objective.target} ${objective.progressLabel}`;
+  objective.targetLabel = `${objective.target} ${objective.progressLabel || 'captures'}`;
 }
 
 function showRunChoicePrompt(title: string, detail: string, options: ChoicePromptOption[]): Promise<string> {
@@ -3853,6 +3853,7 @@ window.addEventListener('wheel', (e) => {
 // ===================================================================
 
 function firePort() {
+  if (gamePaused) return;
   if (!combat.canFirePort) return;
   const stats = progression.getPlayerStats();
   const count = stats.fullBroadside ? 5 : 3;
@@ -3865,8 +3866,8 @@ function firePort() {
     audio.playNeptuneCharge(combat.neptunesShotCounter);
   }
 
-  // Muzzle flash + smoke from port side
-  const sideDir = new THREE.Vector3(-Math.cos(playerAngle), 0.3, Math.sin(playerAngle));
+  // Muzzle flash + smoke from port side (left on screen = +cos, -sin)
+  const sideDir = new THREE.Vector3(Math.cos(playerAngle), 0.3, -Math.sin(playerAngle));
   const smokeOrigin = playerPos.clone().add(sideDir.clone().multiplyScalar(1.5));
   smokeOrigin.y = playerPos.y + 0.8;
   cannonSmoke.emit(smokeOrigin, sideDir, 15);
@@ -3880,6 +3881,7 @@ function firePort() {
 }
 
 function fireStarboard() {
+  if (gamePaused) return;
   if (!combat.canFireStarboard) return;
   const stats = progression.getPlayerStats();
   const count = stats.fullBroadside ? 5 : 3;
@@ -3892,8 +3894,8 @@ function fireStarboard() {
     audio.playNeptuneCharge(combat.neptunesShotCounter);
   }
 
-  // Muzzle flash + smoke from starboard side
-  const sideDir = new THREE.Vector3(Math.cos(playerAngle), 0.3, -Math.sin(playerAngle));
+  // Muzzle flash + smoke from starboard side (right on screen = -cos, +sin)
+  const sideDir = new THREE.Vector3(-Math.cos(playerAngle), 0.3, Math.sin(playerAngle));
   const smokeOrigin = playerPos.clone().add(sideDir.clone().multiplyScalar(1.5));
   smokeOrigin.y = playerPos.y + 0.8;
   cannonSmoke.emit(smokeOrigin, sideDir, 15);
@@ -4338,13 +4340,13 @@ function updateAutopilot(dt: number) {
       // Fire broadsides when target is abeam (perpendicular)
       const relAngle = Math.abs(normalizeAngle(toTarget - playerAngle));
       if (relAngle > Math.PI / 4 && relAngle < Math.PI * 3 / 4 && dist < 30) {
-        // Port side (target is to the left)
-        if (normalizeAngle(toTarget - playerAngle) > 0 && combat.canFirePort) {
-          firePort();
-        }
-        // Starboard side (target is to the right)
-        if (normalizeAngle(toTarget - playerAngle) < 0 && combat.canFireStarboard) {
+        // Positive world-space angle = screen right → starboard
+        if (normalizeAngle(toTarget - playerAngle) > 0 && combat.canFireStarboard) {
           fireStarboard();
+        }
+        // Negative world-space angle = screen left → port
+        if (normalizeAngle(toTarget - playerAngle) < 0 && combat.canFirePort) {
+          firePort();
         }
       }
       break;

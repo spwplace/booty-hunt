@@ -211,18 +211,19 @@ export class CombatSystem {
 
     // Determine broadside direction
     // Ship forward is (sin(angle), 0, cos(angle))
-    // Port  (left)  = rotate heading -90 degrees = (-cos(angle), 0, sin(angle))
-    // Starboard (right) = rotate heading +90 degrees = (cos(angle), 0, -sin(angle))
+    // Camera looks along +Z from behind the ship, flipping screen X relative to world X.
+    // Port  (left on screen)  = (cos(angle), 0, -sin(angle))
+    // Starboard (right on screen) = (-cos(angle), 0, sin(angle))
     const forwardX = Math.sin(shipAngle);
     const forwardZ = Math.cos(shipAngle);
 
     let sideX: number, sideZ: number;
     if (side === 'port') {
-      sideX = -forwardZ;
-      sideZ = forwardX;
-    } else {
       sideX = forwardZ;
       sideZ = -forwardX;
+    } else {
+      sideX = -forwardZ;
+      sideZ = forwardX;
     }
 
     // Spawn offset: displace from ship center toward firing side

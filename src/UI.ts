@@ -437,7 +437,7 @@ export class UI {
           : '';
 
         card.innerHTML = `
-          <div class="tier-badge ${tier}" style="position:absolute;top:6px;right:6px;">${tier.charAt(0).toUpperCase() + tier.slice(1)}</div>
+          <div class="tier-badge ${tier}" style="position:absolute;top:6px;right:22px;">${tier.charAt(0).toUpperCase() + tier.slice(1)}</div>
           <div class="upgrade-icon">${upgrade.icon}</div>
           <div class="upgrade-name">${upgrade.name}</div>
           <div class="upgrade-desc">${upgrade.description}</div>
