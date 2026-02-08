@@ -20,7 +20,7 @@ const CIRCLE_PREFERRED_DIST = 20;
 const CIRCLE_CHASE_DIST = 50;
 const CIRCLE_TURN_RATE = 2.8;
 const CIRCLE_ORBIT_SPEED = 1.8;
-const CIRCLE_FIRE_ARC = Math.PI / 4; // ~45 degrees from broadside
+const CIRCLE_FIRE_ARC = Math.PI / 2; // ~90 degrees from broadside (widened for more shooting)
 
 // Beeline behavior
 const BEELINE_TURN_RATE = 4.0;
@@ -35,8 +35,8 @@ const GHOST_FIRE_RANGE = 40;
 const FORMATION_SPACING = 8;
 const FORMATION_TURN_RATE = 2.0;
 const FORMATION_ENGAGE_DIST = 45;
-const FORMATION_FIRE_ARC = Math.PI / 3; // ~60 degrees from broadside
-const FORMATION_FIRE_COOLDOWN = 3.5;
+const FORMATION_FIRE_ARC = Math.PI / 1.5; // ~120 degrees from broadside (much wider)
+const FORMATION_FIRE_COOLDOWN = 2.5; // Faster firing
 
 const DEFAULT_PRESSURE_PROFILE = {
   speedMult: 1,
@@ -667,8 +667,8 @@ export class EnemyAISystem {
     // Fire ships don't fire cannons
     if (config.behavior === 'beeline') return false;
 
-    // Range check
-    const fireRange = (merchant.isBoss ? 55 : 45) * p.fireRangeMult;
+    // Range check (increased range for better engagement)
+    const fireRange = (merchant.isBoss ? 70 : 60) * p.fireRangeMult;
     if (dist > fireRange) return false;
 
     // Broadside check for circle_strafe and formation behaviors
@@ -701,16 +701,16 @@ export class EnemyAISystem {
    */
   static getFireCooldown(merchant: MerchantV1): number {
     const p = EnemyAISystem.pressureProfile;
-    if (merchant.isBoss && merchant.bossEnraged) return (0.8 + Math.random() * 0.5) * p.fireCooldownMult;
-    if (merchant.isBoss) return (1.5 + Math.random() * 1.0) * p.fireCooldownMult;
+    if (merchant.isBoss && merchant.bossEnraged) return (0.6 + Math.random() * 0.4) * p.fireCooldownMult;
+    if (merchant.isBoss) return (1.2 + Math.random() * 0.8) * p.fireCooldownMult;
 
     const config = ENEMY_TYPE_CONFIGS[merchant.enemyType];
 
     switch (config.behavior) {
-      case 'circle_strafe': return (2.5 + Math.random() * 1.5) * p.fireCooldownMult;
-      case 'phase': return (2.0 + Math.random() * 1.5) * p.fireCooldownMult;
-      case 'formation': return (FORMATION_FIRE_COOLDOWN + Math.random() * 1.0) * p.fireCooldownMult;
-      default: return (3.0 + Math.random() * 2.0) * p.fireCooldownMult;
+      case 'circle_strafe': return (1.8 + Math.random() * 1.0) * p.fireCooldownMult; // Faster
+      case 'phase': return (1.5 + Math.random() * 1.0) * p.fireCooldownMult; // Faster
+      case 'formation': return (FORMATION_FIRE_COOLDOWN + Math.random() * 0.8) * p.fireCooldownMult;
+      default: return (2.0 + Math.random() * 1.5) * p.fireCooldownMult; // Faster
     }
   }
 
@@ -792,7 +792,7 @@ export class EnemyAISystem {
       formationLeaderId: -1,
       isBoss,
       hitRadius: 2.0 + scale,
-      fireTimer: 2 + Math.random() * 2,
+      fireTimer: 1 + Math.random() * 1.5, // Reduced initial cooldown
     };
   }
 

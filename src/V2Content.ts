@@ -104,7 +104,7 @@ function assertContentIntegrity(data: V2ContentData): void {
   }
 
   for (const eventCard of data.events) {
-    if (!regionIds.has(eventCard.region)) {
+    if (eventCard.region !== "global" && !regionIds.has(eventCard.region)) {
       throw new Error(`Event ${eventCard.id} references unknown region "${eventCard.region}".`);
     }
     for (const factionId of eventCard.factions) {

@@ -9,6 +9,7 @@ import type {
   RunHistoryEntry,
   WaveConfigV1,
   SaveDataV1,
+  KeyBindings,
 } from './Types';
 import { SHIP_CLASS_CONFIGS, WAVE_TABLE } from './Types';
 import type { V2Doctrine } from './V2Content';
@@ -83,6 +84,20 @@ export interface PlayerStats {
   cannonsPerSide?: number;
   /** Dodge bonus from ship class */
   shipDodgeBonus?: number;
+  /** Crow's Nest: vision range bonus + armed ship markers */
+  crowsNestActive?: boolean;
+  /** Copper Plating: extra armor */
+  copperPlating?: boolean;
+  /** Powder Monkeys: extra cannonball per broadside */
+  powderMonkeys?: boolean;
+  /** Fog Lanterns: capture range bonus in fog/night */
+  fogLanterns?: boolean;
+  /** Kraken's Fury: every 3rd broadside fires double */
+  krakensFury?: boolean;
+  /** Kraken's Fury shot counter */
+  krakensFuryCounter?: number;
+  /** Tidal Ward: immune to whirlpool/fire_ship AoE */
+  tidalWard?: boolean;
 }
 
 export interface ProgressionRunSnapshot {
@@ -107,6 +122,7 @@ export interface RuntimeSettings {
   sfxVolume: number;
   graphicsQuality: 'low' | 'medium' | 'high';
   accessibility: AccessibilitySettings;
+  keyBindings: KeyBindings;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,10 +174,30 @@ const SYNERGIES: Synergy[] = [
       stats.stormImmunity = true;
     },
   },
+  {
+    id: 'deep_six',
+    name: 'Deep Six',
+    requiredUpgrades: ['krakens_fury', 'neptunes_wrath'],
+    description: "Kraken's Fury + Neptune's Wrath: AoE radius doubled",
+    apply(_stats) {
+      // AoE doubling handled at combat resolution time via synergy check
+    },
+  },
+  {
+    id: 'iron_tide',
+    name: 'Iron Tide',
+    requiredUpgrades: ['copper_plating', 'tar_and_pitch'],
+    description: 'Copper Plating + Tar & Pitch: +20% max HP bonus',
+    apply(stats) {
+      const bonus = Math.round(stats.maxHealth * 0.2);
+      stats.maxHealth += bonus;
+      stats.health = Math.min(stats.health + bonus, stats.maxHealth);
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
-// Upgrade pool -- 24 total
+// Upgrade pool -- 32 total
 // ---------------------------------------------------------------------------
 
 const UPGRADE_POOL: Upgrade[] = [
@@ -427,6 +463,100 @@ const UPGRADE_POOL: Upgrade[] = [
       stats.neptunesWrathCounter = 0;
     },
   },
+
+  // ---- Expansion: 8 new upgrades (24 → 32) ----
+
+  // Common
+  {
+    id: 'crows_nest',
+    name: "Crow's Nest",
+    description: '+10% vision range, marks armed ships',
+    icon: '\uD83E\uDDA5',
+    tier: 'common',
+    apply(stats) {
+      stats.lookoutEyeRange = (stats.lookoutEyeRange ?? 1) * 1.1;
+      stats.crowsNestActive = true;
+    },
+  },
+  {
+    id: 'rum_rations',
+    name: 'Rum Rations',
+    description: '+3 HP regen per wave',
+    icon: '\uD83C\uDF7A',
+    tier: 'common',
+    apply(stats) {
+      stats.hpRegenPerWave = (stats.hpRegenPerWave ?? 0) + 3;
+    },
+  },
+  {
+    id: 'copper_plating',
+    name: 'Copper Plating',
+    description: '-10% damage taken',
+    icon: '\uD83E\uDE99',
+    tier: 'common',
+    apply(stats) {
+      stats.armor = Math.max(0, stats.armor - 0.1);
+      stats.copperPlating = true;
+    },
+  },
+  {
+    id: 'spare_timber',
+    name: 'Spare Timber',
+    description: 'Reinforce the hull with reserve planks',
+    icon: '\uD83E\uDEB5',
+    tier: 'common',
+    apply(stats) {
+      stats.maxHealth += 15;
+      stats.health = Math.min(stats.health + 15, stats.maxHealth);
+    },
+  },
+
+  // Rare
+  {
+    id: 'powder_monkeys',
+    name: 'Powder Monkeys',
+    description: '-20% cooldown, cannons fire an extra ball',
+    icon: '\uD83D\uDC12',
+    tier: 'rare',
+    apply(stats) {
+      stats.cannonCooldown *= 0.8;
+      stats.powderMonkeys = true;
+    },
+  },
+  {
+    id: 'fog_lanterns',
+    name: 'Fog Lanterns',
+    description: '+20% capture range in fog or night',
+    icon: '\uD83C\uDFEE',
+    tier: 'rare',
+    apply(stats) {
+      stats.fogLanterns = true;
+    },
+  },
+
+  // Legendary
+  {
+    id: 'krakens_fury',
+    name: "Kraken's Fury",
+    description: 'Every 3rd broadside fires double cannonballs',
+    icon: '\uD83E\uDD91',
+    tier: 'legendary',
+    apply(stats) {
+      stats.krakensFury = true;
+      stats.krakensFuryCounter = 0;
+    },
+  },
+  {
+    id: 'tidal_ward',
+    name: 'Tidal Ward',
+    description: 'Immune to whirlpool and fire ship AoE, +10% HP regen/wave',
+    icon: '\uD83C\uDF0A',
+    tier: 'legendary',
+    apply(stats) {
+      stats.tidalWard = true;
+      stats.hpRegenPerWave = (stats.hpRegenPerWave ?? 0) + Math.round(stats.maxHealth * 0.1);
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -516,7 +646,7 @@ function createDefaultSaveV1(): SaveDataV1 {
     bosunUnlocked: false,
     quartermasterUnlocked: false,
     endlessModeUnlocked: false,
-    tutorialCompleted: false,
+
     masterVolume: 1,
     musicVolume: 0.7,
     sfxVolume: 1,
@@ -526,6 +656,16 @@ function createDefaultSaveV1(): SaveDataV1 {
     motionIntensity: 1,
     flashIntensity: 1,
     colorblindMode: 'off',
+    keyBindings: {
+      forward: 'w',
+      backward: 's',
+      left: 'a',
+      right: 'd',
+      port: 'q',
+      starboard: 'e',
+      spyglass: ' ',
+      codex: 'c',
+    },
     v2CodexDiscovered: [],
     v2FactionReputation: {},
   };
@@ -550,7 +690,7 @@ function loadSaveV1(): SaveDataV1 {
         bosunUnlocked: data.bosunUnlocked ?? false,
         quartermasterUnlocked: data.quartermasterUnlocked ?? false,
         endlessModeUnlocked: data.endlessModeUnlocked ?? false,
-        tutorialCompleted: data.tutorialCompleted ?? false,
+
         masterVolume: clamp01(data.masterVolume ?? 1),
         musicVolume: clamp01(data.musicVolume ?? 0.7),
         sfxVolume: clamp01(data.sfxVolume ?? 1),
@@ -562,6 +702,16 @@ function loadSaveV1(): SaveDataV1 {
         motionIntensity: clamp01(data.motionIntensity ?? 1),
         flashIntensity: clamp01(data.flashIntensity ?? 1),
         colorblindMode: parseColorblindMode(data.colorblindMode),
+        keyBindings: {
+          forward: typeof data.keyBindings?.forward === 'string' ? data.keyBindings.forward : 'w',
+          backward: typeof data.keyBindings?.backward === 'string' ? data.keyBindings.backward : 's',
+          left: typeof data.keyBindings?.left === 'string' ? data.keyBindings.left : 'a',
+          right: typeof data.keyBindings?.right === 'string' ? data.keyBindings.right : 'd',
+          port: typeof data.keyBindings?.port === 'string' ? data.keyBindings.port : 'q',
+          starboard: typeof data.keyBindings?.starboard === 'string' ? data.keyBindings.starboard : 'e',
+          spyglass: typeof data.keyBindings?.spyglass === 'string' ? data.keyBindings.spyglass : ' ',
+          codex: typeof data.keyBindings?.codex === 'string' ? data.keyBindings.codex : 'c',
+        },
         v2CodexDiscovered: Array.isArray(data.v2CodexDiscovered)
           ? data.v2CodexDiscovered.filter((v): v is string => typeof v === 'string')
           : [],
@@ -993,11 +1143,15 @@ export class ProgressionSystem {
         flashIntensity: this.metaStatsV1.flashIntensity,
         colorblindMode: this.metaStatsV1.colorblindMode,
       },
+      keyBindings: { ...this.metaStatsV1.keyBindings },
     };
   }
 
   updateRuntimeSettings(
-    patch: Partial<Omit<RuntimeSettings, 'accessibility'>> & { accessibility?: Partial<AccessibilitySettings> },
+    patch: Partial<Omit<RuntimeSettings, 'accessibility' | 'keyBindings'>> & {
+      accessibility?: Partial<AccessibilitySettings>;
+      keyBindings?: Partial<KeyBindings>;
+    },
   ): RuntimeSettings {
     if (patch.masterVolume != null) {
       this.metaStatsV1.masterVolume = clamp01(patch.masterVolume);
@@ -1027,6 +1181,16 @@ export class ProgressionSystem {
       if (patch.accessibility.colorblindMode != null) {
         this.metaStatsV1.colorblindMode = parseColorblindMode(patch.accessibility.colorblindMode);
       }
+    }
+    if (patch.keyBindings) {
+      if (patch.keyBindings.forward) this.metaStatsV1.keyBindings.forward = patch.keyBindings.forward;
+      if (patch.keyBindings.backward) this.metaStatsV1.keyBindings.backward = patch.keyBindings.backward;
+      if (patch.keyBindings.left) this.metaStatsV1.keyBindings.left = patch.keyBindings.left;
+      if (patch.keyBindings.right) this.metaStatsV1.keyBindings.right = patch.keyBindings.right;
+      if (patch.keyBindings.port) this.metaStatsV1.keyBindings.port = patch.keyBindings.port;
+      if (patch.keyBindings.starboard) this.metaStatsV1.keyBindings.starboard = patch.keyBindings.starboard;
+      if (patch.keyBindings.spyglass) this.metaStatsV1.keyBindings.spyglass = patch.keyBindings.spyglass;
+      if (patch.keyBindings.codex) this.metaStatsV1.keyBindings.codex = patch.keyBindings.codex;
     }
     writeSaveV1(this.metaStatsV1);
     return this.getRuntimeSettings();
@@ -1058,16 +1222,6 @@ export class ProgressionSystem {
 
   getMetaStatsV1(): SaveDataV1 {
     return { ...this.metaStatsV1 };
-  }
-
-  isTutorialCompleted(): boolean {
-    return this.metaStatsV1.tutorialCompleted;
-  }
-
-  markTutorialCompleted(): void {
-    if (this.metaStatsV1.tutorialCompleted) return;
-    this.metaStatsV1.tutorialCompleted = true;
-    writeSaveV1(this.metaStatsV1);
   }
 
   getActiveDoctrine(): { id: string; name: string; summary: string } | null {

@@ -14,11 +14,10 @@ jobs:
   lint-test-build:
     runs-on: ubuntu-latest
     env:
-      DEV: "true"
-      VITE_DEV: "true"
-      VITE_ENABLE_DEV_PANEL: "1"
-      VITE_ENABLE_SCENARIO_EDITOR: "1"
-      VITE_ENABLE_TELEMETRY_EXPORT: "1"
+      # Default to dev for PRs/dev branch
+      VITE_ENABLE_DEV_PANEL: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
+      VITE_ENABLE_SCENARIO_EDITOR: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
+      VITE_ENABLE_TELEMETRY_EXPORT: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

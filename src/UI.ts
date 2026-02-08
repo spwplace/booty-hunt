@@ -107,6 +107,7 @@ export class UI {
   // Mobile cannon buttons
   private btnPort: HTMLElement | null = null;
   private btnStarboard: HTMLElement | null = null;
+  private cannonButtonAC: AbortController | null = null;
 
   // Boss health bar elements
   private bossHealthBar: HTMLElement | null = null;
@@ -159,11 +160,11 @@ export class UI {
   private lastEventTimerPct: number = -1;
   private treasureMapEl: HTMLElement | null = null;
   private portCrewHireEl: HTMLElement | null = null;
-  private captainsLogEl: HTMLElement | null = null;
-  private captainLogQueue: CaptainLogEntry[] = [];
-  private captainLogTimeout: ReturnType<typeof setTimeout> | null = null;
-  private captainLogBusy = false;
-  private lastCaptainLog = '';
+  // Journal (persistent log)
+  private captainsJournalEl: HTMLElement | null = null;
+  private journalEntriesEl: HTMLElement | null = null;
+  private journalEntries: { message: string; tone: CaptainLogTone; timestamp: string }[] = [];
+  private maxJournalEntries = 20;
   private v2ResourcesEl: HTMLElement | null = null;
   private lastV2ResourcesText = '';
   private v2FactionEl: HTMLElement | null = null;
@@ -235,7 +236,8 @@ export class UI {
     this.eventTimerEl = document.getElementById('event-timer');
     this.treasureMapEl = document.getElementById('treasure-map-indicator');
     this.portCrewHireEl = document.getElementById('port-crew-hire');
-    this.captainsLogEl = document.getElementById('captains-log');
+    this.captainsJournalEl = document.getElementById('captains-journal');
+    this.journalEntriesEl = document.getElementById('journal-entries');
     this.v2ResourcesEl = document.getElementById('v2-resources');
     this.v2FactionEl = document.getElementById('v2-faction');
     this.codexPanelEl = document.getElementById('codex-panel');
@@ -426,53 +428,22 @@ export class UI {
         card.style.pointerEvents = 'auto';
         card.style.cursor = 'pointer';
 
-        // Tier styling
+        // Tier styling via CSS classes
         const tier = upgrade.tier || 'common';
-        let tierBadge = '';
-        let borderColor = 'rgba(255,255,255,0.3)';
-        let glowStyle = '';
-
-        if (tier === 'rare') {
-          borderColor = '#4fc3f7';
-          glowStyle = 'box-shadow: 0 0 12px rgba(79,195,247,0.5), inset 0 0 8px rgba(79,195,247,0.15);';
-          tierBadge = `<div style="
-            position:absolute; top:6px; right:6px;
-            font-size:10px; text-transform:uppercase; letter-spacing:1px;
-            color:#4fc3f7; background:rgba(0,0,0,0.5);
-            padding:2px 6px; border-radius:3px; border:1px solid #4fc3f7;
-          ">Rare</div>`;
-        } else if (tier === 'legendary') {
-          borderColor = '#ffd700';
-          glowStyle = 'box-shadow: 0 0 16px rgba(255,215,0,0.6), inset 0 0 10px rgba(255,215,0,0.15);';
-          tierBadge = `<div style="
-            position:absolute; top:6px; right:6px;
-            font-size:10px; text-transform:uppercase; letter-spacing:1px;
-            color:#ffd700; background:rgba(0,0,0,0.5);
-            padding:2px 6px; border-radius:3px; border:1px solid #ffd700;
-          ">Legendary</div>`;
-        } else {
-          tierBadge = `<div style="
-            position:absolute; top:6px; right:6px;
-            font-size:10px; text-transform:uppercase; letter-spacing:1px;
-            color:rgba(255,255,255,0.6); background:rgba(0,0,0,0.4);
-            padding:2px 6px; border-radius:3px; border:1px solid rgba(255,255,255,0.3);
-          ">Common</div>`;
-        }
-
-        card.style.border = `2px solid ${borderColor}`;
-        card.style.cssText += glowStyle;
-        card.style.position = 'relative';
+        card.classList.add(`tier-${tier}`);
 
         const statPreview = upgrade.stat
-          ? `<div class="upgrade-stat" style="font-size:11px;color:#aaa;margin-top:4px;">${upgrade.stat}</div>`
+          ? `<div class="upgrade-stat" style="font-size:11px;color:rgba(232,213,163,0.6);margin-top:4px;">${upgrade.stat}</div>`
           : '';
 
         card.innerHTML = `
-          ${tierBadge}
+          <div class="tier-badge ${tier}" style="position:absolute;top:6px;right:6px;">${tier.charAt(0).toUpperCase() + tier.slice(1)}</div>
           <div class="upgrade-icon">${upgrade.icon}</div>
           <div class="upgrade-name">${upgrade.name}</div>
           <div class="upgrade-desc">${upgrade.description}</div>
           ${statPreview}
+          <span class="upgrade-rivet-bl"></span>
+          <span class="upgrade-rivet-br"></span>
         `;
 
         card.addEventListener('click', () => {
@@ -625,13 +596,17 @@ export class UI {
     onPort?: () => void,
     onStarboard?: () => void
   ) {
+    this.cannonButtonAC?.abort();
+    this.cannonButtonAC = new AbortController();
+    const { signal } = this.cannonButtonAC;
+
     if (this.btnPort) {
       this.btnPort.classList.add('show');
       if (onPort) {
         this.btnPort.addEventListener('touchstart', (e) => {
           e.preventDefault();
           onPort();
-        }, { passive: false });
+        }, { passive: false, signal });
       }
     }
     if (this.btnStarboard) {
@@ -640,9 +615,16 @@ export class UI {
         this.btnStarboard.addEventListener('touchstart', (e) => {
           e.preventDefault();
           onStarboard();
-        }, { passive: false });
+        }, { passive: false, signal });
       }
     }
+  }
+
+  hideMobileCannonButtons(): void {
+    this.cannonButtonAC?.abort();
+    this.cannonButtonAC = null;
+    this.btnPort?.classList.remove('show');
+    this.btnStarboard?.classList.remove('show');
   }
 
   /* ------------------------------------------------------------------ */
@@ -898,17 +880,17 @@ export class UI {
       }
     }
 
-    // Player triangle (gold, rotated)
+    // Player triangle (gold, rotated to match ship heading)
+    // Ship at angle=0 faces +Z. On minimap +Z→+Y (down). Triangle drawn pointing up needs 180° flip.
+    // Then add playerAngle to rotate with ship heading.
     ctx.save();
     ctx.translate(cx, cy);
-    // Add PI to align canvas rotation with 3D world: ship points +Z when angle=0,
-    // but canvas triangle points "up" (negative Y) when rotation=0
-    ctx.rotate(playerAngle + Math.PI);
+    ctx.rotate(-playerAngle + Math.PI);  // Negated angle to fix mirror effect
     ctx.fillStyle = '#ffd700';
     ctx.beginPath();
-    ctx.moveTo(0, -6 * mapScale);
-    ctx.lineTo(-4 * mapScale, 4 * mapScale);
-    ctx.lineTo(4 * mapScale, 4 * mapScale);
+    ctx.moveTo(0, -6 * mapScale);  // Tip
+    ctx.lineTo(-4 * mapScale, 4 * mapScale);  // Bottom left
+    ctx.lineTo(4 * mapScale, 4 * mapScale);  // Bottom right
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -1187,7 +1169,7 @@ export class UI {
     this.shipSelectEl.innerHTML = `
       <h2>Chart Yer Voyage</h2>
       <div style="color:rgba(255,255,255,0.7);font-size:0.95rem;margin:-0.9rem 0 1.4rem 0;">Select vessel and doctrine before casting off.</div>
-      <div style="width:min(92vw,980px);display:flex;flex-direction:column;gap:16px;">
+      <div style="width:min(92vw,980px);display:flex;flex-direction:column;gap:12px;">
         <section>
           <div style="color:#ffd99a;font-size:1rem;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">Ship Frame</div>
           <div id="run-setup-ships" style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;"></div>
@@ -1278,9 +1260,9 @@ export class UI {
         const card = document.createElement('button');
         card.type = 'button';
         card.style.cssText = `
-          width: min(280px, 92vw);
+          width: min(280px, 88vw);
           text-align: left;
-          padding: 11px 12px;
+          padding: 9px 11px;
           background: ${selected ? 'rgba(70, 115, 166, 0.34)' : 'rgba(18, 24, 36, 0.85)'};
           border: 1px solid ${selected ? '#8ac9ff' : 'rgba(110, 156, 202, 0.35)'};
           border-radius: 8px;
@@ -1489,8 +1471,9 @@ export class UI {
       motionIntensity: number;
       flashIntensity: number;
       colorblindMode: string;
+      keyBindings: Record<string, string>;
     },
-    onChange: (key: string, value: number | string) => void
+    onChange: (key: string, value: any) => void
   ): void {
     if (!this.settingsPanelEl) {
       this.settingsPanelEl = document.getElementById('settings-panel');
@@ -1509,6 +1492,32 @@ export class UI {
     const flashIntensity = document.getElementById('acc-flash') as HTMLInputElement | null;
     const colorblindMode = document.getElementById('acc-colorblind') as HTMLSelectElement | null;
     const backBtn = document.getElementById('settings-back');
+
+    // Rebind buttons
+    const rebindBtns = this.settingsPanelEl.querySelectorAll('.rebind-btn');
+    rebindBtns.forEach((btn) => {
+      const b = btn as HTMLButtonElement;
+      const action = b.dataset.action;
+      if (action && currentSettings.keyBindings[action]) {
+        const key = currentSettings.keyBindings[action];
+        b.textContent = key === ' ' ? 'Space' : key.toUpperCase();
+        
+        b.onclick = () => {
+          b.textContent = '...';
+          b.classList.add('waiting');
+          
+          const handler = (e: KeyboardEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const newKey = e.key === ' ' ? ' ' : e.key.toLowerCase();
+            onChange('keyBinding', { action, key: newKey });
+            b.classList.remove('waiting');
+            window.removeEventListener('keydown', handler, true);
+          };
+          window.addEventListener('keydown', handler, true);
+        };
+      }
+    });
 
     if (volMaster) {
       volMaster.value = String(currentSettings.master);
@@ -2376,63 +2385,72 @@ export class UI {
   }
 
   /* ------------------------------------------------------------------ */
-  /*  CAPTAIN'S LOG                                                      */
+  /*  CAPTAIN'S JOURNAL (Persistent Log)                                 */
   /* ------------------------------------------------------------------ */
 
-  showCaptainLog(message: string, tone: CaptainLogTone = 'neutral'): void {
+  addJournalEntry(message: string, tone: CaptainLogTone = 'neutral'): void {
     if (this.screensaverMode) return;
     const text = message.trim();
     if (!text) return;
-    if (text === this.lastCaptainLog && this.captainLogQueue.length === 0) return;
 
-    this.captainLogQueue.push({ message: text, tone });
-    this.flushCaptainLogQueue();
+    // Get current time for timestamp
+    const now = new Date();
+    const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+
+    // Add to entries array
+    this.journalEntries.push({ message: text, tone, timestamp });
+
+    // Trim to max entries
+    if (this.journalEntries.length > this.maxJournalEntries) {
+      this.journalEntries.shift();
+    }
+
+    this.renderJournal();
   }
 
   clearCaptainLog(): void {
-    this.captainLogQueue = [];
-    this.captainLogBusy = false;
-    if (this.captainLogTimeout) {
-      clearTimeout(this.captainLogTimeout);
-      this.captainLogTimeout = null;
+    this.journalEntries = [];
+    if (this.captainsJournalEl) {
+      this.captainsJournalEl.classList.remove('show');
     }
-    if (!this.captainsLogEl) {
-      this.captainsLogEl = document.getElementById('captains-log');
+    if (this.journalEntriesEl) {
+      this.journalEntriesEl.innerHTML = '';
     }
-    if (!this.captainsLogEl) return;
-    this.captainsLogEl.classList.remove('show', 'tone-warning', 'tone-reward', 'tone-mystic');
   }
 
-  private flushCaptainLogQueue(): void {
-    if (this.captainLogBusy) return;
-    if (this.captainLogQueue.length === 0) return;
-
-    if (!this.captainsLogEl) {
-      this.captainsLogEl = document.getElementById('captains-log');
+  private renderJournal(): void {
+    if (!this.captainsJournalEl) {
+      this.captainsJournalEl = document.getElementById('captains-journal');
     }
-    if (!this.captainsLogEl) return;
+    if (!this.journalEntriesEl) {
+      this.journalEntriesEl = document.getElementById('journal-entries');
+    }
+    if (!this.captainsJournalEl || !this.journalEntriesEl) return;
 
-    const entry = this.captainLogQueue.shift();
-    if (!entry) return;
+    // Show the journal container
+    this.captainsJournalEl.classList.add('show');
 
-    this.captainLogBusy = true;
-    this.lastCaptainLog = entry.message;
-    this.captainsLogEl.textContent = `Captain's Log: ${entry.message}`;
-    this.captainsLogEl.classList.remove('tone-warning', 'tone-reward', 'tone-mystic');
-    if (entry.tone === 'warning') this.captainsLogEl.classList.add('tone-warning');
-    else if (entry.tone === 'reward') this.captainsLogEl.classList.add('tone-reward');
-    else if (entry.tone === 'mystic') this.captainsLogEl.classList.add('tone-mystic');
+    // Render entries
+    this.journalEntriesEl.innerHTML = this.journalEntries
+      .map((entry) => {
+        const toneClass = entry.tone !== 'neutral' ? `tone-${entry.tone}` : 'tone-neutral';
+        return `
+          <div class="journal-entry ${toneClass}">
+            <div class="journal-timestamp">${entry.timestamp}</div>
+            <div>${this.escapeHtml(entry.message)}</div>
+          </div>
+        `;
+      })
+      .join('');
 
-    this.captainsLogEl.classList.add('show');
+    // Auto-scroll to bottom
+    this.journalEntriesEl.scrollTop = this.journalEntriesEl.scrollHeight;
+  }
 
-    this.captainLogTimeout = setTimeout(() => {
-      if (!this.captainsLogEl) return;
-      this.captainsLogEl.classList.remove('show');
-      this.captainLogTimeout = setTimeout(() => {
-        this.captainLogBusy = false;
-        this.flushCaptainLogQueue();
-      }, 280);
-    }, 5000);
+  private escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   /* ------------------------------------------------------------------ */
@@ -2510,7 +2528,7 @@ export class UI {
       this.waveCounter,
       this.bossHealthBar,
       this.crewHudEl,
-      this.captainsLogEl,
+      this.captainsJournalEl,
       this.v2ResourcesEl,
       this.v2FactionEl,
       this.eventTimerEl,
@@ -2519,6 +2537,8 @@ export class UI {
       this.comboEl,
       this.captureEl,
       this.distanceEl,
+      this.btnPort,
+      this.btnStarboard,
     ];
     for (const el of els) {
       if (!el) continue;

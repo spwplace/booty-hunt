@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [dev]
+    branches: [dev, main]
 
 permissions:
   contents: read
@@ -15,14 +15,12 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     env:
-      DEV: "true"
-      VITE_DEV: "true"
-      VITE_ENABLE_DEV_PANEL: "1"
-      VITE_ENABLE_SCENARIO_EDITOR: "1"
-      VITE_ENABLE_TELEMETRY_EXPORT: "1"
+      # Disable dev surfaces on main branch
+      VITE_ENABLE_DEV_PANEL: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
+      VITE_ENABLE_SCENARIO_EDITOR: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
+      VITE_ENABLE_TELEMETRY_EXPORT: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -35,35 +33,44 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Build latest from dev branch
+      # Build current branch
       - run: npm ci
       - run: npm run lint
       - run: npm run test
       - run: npm run build
-      - run: mv dist latest-build
+      - run: mv dist current-build
 
-      # Build each versioned tag
+      # Build each versioned tag (always production-like)
       - name: Build historical versions
         run: |
           for tag in $(git tag -l 'v*' | sort -V); do
             echo "::group::Building $tag"
             git checkout "$tag"
             npm ci
-            npx vite build --base './' --outDir "build-$tag"
+            # Force dev flags off for tagged releases
+            VITE_ENABLE_DEV_PANEL=0 VITE_ENABLE_SCENARIO_EDITOR=0 VITE_ENABLE_TELEMETRY_EXPORT=0 npx vite build --base './' --outDir "build-$tag"
             echo "::endgroup::"
           done
 
-      # Assemble: latest at root, each tag in its own subdir
+      # Assemble site
       - name: Assemble site
         run: |
-          mv latest-build dist
+          mkdir site
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            mv current-build site/prod
+            # Also symlink prod to root for main branch
+            cp -r site/prod/* site/
+          else
+            mv current-build site/dev
+          fi
+          
           for tag in $(git tag -l 'v*' | sort -V); do
-            mv "build-$tag" "dist/$tag"
+            mv "build-$tag" "site/$tag"
           done
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: site
       - id: deployment
         uses: actions/deploy-pages@v4

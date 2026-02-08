@@ -280,11 +280,11 @@ export interface WaveConfigV1 {
 
 export const WAVE_TABLE: WaveConfigV1[] = [
   // ── Act 1: Open Waters (waves 1-5) — sloops, galleons, frigates only ──
-  { wave: 1,  totalShips: 4,  armedPercent: 0,    speedMultiplier: 1.00, healthMultiplier: 1.00, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon'],                                              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 2,  totalShips: 5,  armedPercent: 0.10, speedMultiplier: 1.05, healthMultiplier: 1.05, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 3,  totalShips: 5,  armedPercent: 0.20, speedMultiplier: 1.10, healthMultiplier: 1.10, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 4,  totalShips: 6,  armedPercent: 0.25, speedMultiplier: 1.15, healthMultiplier: 1.15, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
-  { wave: 5,  totalShips: 7,  armedPercent: 0.30, speedMultiplier: 1.25, healthMultiplier: 1.25, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: 'Captain Blackbeard', bossHp: 300, isPortWave: true,  specialEvent: null },
+  { wave: 1,  totalShips: 4,  armedPercent: 0.30, speedMultiplier: 1.00, healthMultiplier: 1.00, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon'],                                              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 2,  totalShips: 5,  armedPercent: 0.35, speedMultiplier: 1.05, healthMultiplier: 1.05, weather: 'clear',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 3,  totalShips: 5,  armedPercent: 0.40, speedMultiplier: 1.10, healthMultiplier: 1.10, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 4,  totalShips: 6,  armedPercent: 0.45, speedMultiplier: 1.15, healthMultiplier: 1.15, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
+  { wave: 5,  totalShips: 7,  armedPercent: 0.50, speedMultiplier: 1.25, healthMultiplier: 1.25, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate'],                             bossName: 'Captain Blackbeard', bossHp: 300, isPortWave: true,  specialEvent: null },
   // ── Act 2: Contested Seas (waves 6-10) — fire ships & ghost ships enter ──
   { wave: 6,  totalShips: 7,  armedPercent: 0.30, speedMultiplier: 1.25, healthMultiplier: 1.30, weather: 'foggy',  enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship'],              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: null },
   { wave: 7,  totalShips: 8,  armedPercent: 0.35, speedMultiplier: 1.30, healthMultiplier: 1.35, weather: 'stormy', enemyTypes: ['merchant_sloop', 'merchant_galleon', 'escort_frigate', 'fire_ship'],              bossName: null,                 bossHp: 0,   isPortWave: false, specialEvent: 'ghost_ship_event' },
@@ -335,6 +335,17 @@ export interface RunHistoryEntry {
 export type DamageResult = 'damaged' | 'dodged' | 'phoenix' | 'dead' | 'already_dead';
 
 export type ColorblindMode = 'off' | 'protanopia' | 'deuteranopia' | 'tritanopia';
+
+export interface KeyBindings {
+  forward: string;
+  backward: string;
+  left: string;
+  right: string;
+  port: string;
+  starboard: string;
+  spyglass: string;
+  codex: string;
+}
 
 export interface AccessibilitySettings {
   uiScale: number;
@@ -402,7 +413,6 @@ export interface SaveDataV1 {
   bosunUnlocked: boolean;
   quartermasterUnlocked: boolean;
   endlessModeUnlocked: boolean;
-  tutorialCompleted: boolean;
   // Settings
   masterVolume: number;
   musicVolume: number;
@@ -414,6 +424,7 @@ export interface SaveDataV1 {
   motionIntensity: number;
   flashIntensity: number;
   colorblindMode: ColorblindMode;
+  keyBindings: KeyBindings;
   // V2 meta progression
   v2CodexDiscovered: string[];
   v2FactionReputation: Record<string, number>;

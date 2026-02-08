@@ -26,12 +26,12 @@ Ship a V2 that adds durable world identity, stronger run variety, and cleaner me
    Contract event cards and negotiation choice prompts now react to regional faction context and route into reputation/economy outcomes.
 3. Milestone C: Doctrine Gameplay (complete)
    Pre-run ship + doctrine setup is live and doctrine starter modifiers apply at run start.
-4. Milestone D: Event Depth (in progress)
-   Event deck expanded to 18 authored cards with interactive branch prompts, region bias weighting, and follow-up trigger chains (`followup:<card>:<choice>`).
+4. Milestone D: Event Depth (complete)
+   Event deck expanded to 40 authored cards with interactive branch prompts, region bias weighting, and follow-up trigger chains (`followup:<card>:<choice>`).
 5. Milestone E: Telemetry Surfaces (complete)
    Dev panel and hotkey telemetry export now dump event logs + counters + run context, plus `npm run analyze:telemetry -- <files...>` for choice-rate and win-delta summaries.
-6. Milestone F: Content Scale (in progress)
-   Runtime assertions now validate V2 content cross-references and data ranges; next step is scaling authored tables.
+6. Milestone F: Content Scale (complete)
+   Runtime assertions now validate V2 content cross-references and data ranges; authored tables meet launch floor (40+ events).
 
 ## Exit Criteria For V2
 1. Every run surfaces at least one region identity beat, one faction beat, and one codex unlock.
