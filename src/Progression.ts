@@ -892,7 +892,7 @@ const FINAL_WAVE = 15;
 // ProgressionSystem
 // ---------------------------------------------------------------------------
 
-export type GameState = 'pre_wave' | 'active' | 'wave_complete' | 'upgrading' | 'port' | 'game_over';
+export type GameState = 'pre_wave' | 'roaming' | 'active' | 'wave_complete' | 'upgrading' | 'port' | 'game_over';
 
 export class ProgressionSystem {
   private stats: PlayerStats;
@@ -1100,6 +1100,10 @@ export class ProgressionSystem {
 
   getState(): GameState {
     return this.state;
+  }
+
+  setState(s: GameState) {
+    this.state = s;
   }
 
   getScore(): number {

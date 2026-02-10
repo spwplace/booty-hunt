@@ -38,6 +38,7 @@ import { MapNodeSystem } from './MapNodeSystem';
 import type { MapNodeType, MapNode } from './MapNodeSystem';
 import { FactionSystem } from './FactionSystem';
 import { EconomySystem } from './EconomySystem';
+import { HeatSystem } from './HeatSystem';
 import { TelemetrySystem } from './TelemetrySystem';
 import {
   saveRunCheckpoint,
@@ -331,6 +332,7 @@ const narrative = new NarrativeSystem((line) => {
 const mapNodes = new MapNodeSystem(v2Content);
 const factions = new FactionSystem(v2Content);
 const economy = new EconomySystem();
+const heatSystem = new HeatSystem();
 const telemetry = new TelemetrySystem();
 let accessibilityMotionIntensity = 1;
 
@@ -3342,6 +3344,9 @@ let lastCaptureTime = -Infinity;
 let waveAnnouncePending = false;
 let waveAnnounceTimer = 0;
 let waveCompleteTimer = 0;
+let isRoaming = false;
+let roamTimer = 0;
+const ROAM_DURATION = 20; // seconds of open water between waves
 let creakTimer = 0;
 let scoreAtWaveStart = 0;
 let gameOverFired = false;
@@ -3397,6 +3402,8 @@ function buildRunCheckpoint(): RunCheckpointV1 | null {
     capturesThisWave,
     armedCapturesThisWave,
     waveCaptureGold,
+    heat: heatSystem.getHeat(),
+    maxHeat: heatSystem.getMaxHeat(),
   };
 }
 
@@ -3607,6 +3614,11 @@ function quitToTitleFromPause(): void {
   waveCompleteTimer = 0;
   waveAnnouncePending = false;
   waveAnnounceTimer = 0;
+  isRoaming = false;
+  roamTimer = 0;
+  touchSpyglass = false;
+  const spyBtn = document.getElementById('btn-spyglass');
+  if (spyBtn) spyBtn.classList.remove('active');
   beginWaveInProgress = false;
   activeWaveConfigV1 = null;
   activeContractObjective = null;
@@ -3799,6 +3811,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Skip roam phase
+  if (isRoaming && (e.key === 'Enter' || e.key === ' ')) {
+    skipRoamPhase();
+    return;
+  }
+
   if (e.key.toLowerCase() === b.codex && gameStarted && !screensaverActive) {
     toggleCodex();
     return;
@@ -3916,7 +3934,6 @@ let touchFwd = 0;
 let touchTurn = 0;
 let touchSpyglass = false;
 let joystickTouchId: number | null = null;
-let spyglassTouchId: number | null = null;
 let joystickCenterX = 0;
 let joystickCenterY = 0;
 
@@ -3951,7 +3968,7 @@ function handleTouchStart(e: TouchEvent) {
     target.tagName === 'BUTTON' ||
     target.closest('button') ||
     target.classList.contains('upgrade-card') ||
-    target.closest('#btn-port, #btn-starboard, #codex-toggle, #tutorial-skip')
+    target.closest('#btn-port, #btn-starboard, #btn-spyglass, #btn-skip-roam, #codex-toggle, #tutorial-skip')
   )) {
     return;
   }
@@ -3972,19 +3989,9 @@ function handleTouchStart(e: TouchEvent) {
       touchTurn = 0;
     }
   }
-  if (spyglassTouchId !== null) {
-    let found = false;
-    for (let j = 0; j < e.touches.length; j++) {
-      if (e.touches[j].identifier === spyglassTouchId) { found = true; break; }
-    }
-    if (!found) {
-      spyglassTouchId = null;
-      touchSpyglass = false;
-    }
-  }
-
   for (let i = 0; i < e.changedTouches.length; i++) {
     const t = e.changedTouches[i];
+    // Joystick: left half of screen
     if (t.clientX < innerWidth * 0.5) {
       if (joystickTouchId === null) {
         joystickTouchId = t.identifier;
@@ -3994,10 +4001,8 @@ function handleTouchStart(e: TouchEvent) {
         joystickBase.style.top = `${t.clientY}px`;
         joystickBase.style.opacity = '1';
       }
-    } else {
-      spyglassTouchId = t.identifier;
-      touchSpyglass = true;
     }
+    // Right-half touches no longer activate spyglass — use toggle button instead
   }
 }
 
@@ -4006,8 +4011,7 @@ function handleTouchMove(e: TouchEvent) {
 
   let tracking = false;
   for (let i = 0; i < e.changedTouches.length; i++) {
-    const id = e.changedTouches[i].identifier;
-    if (id === joystickTouchId || id === spyglassTouchId) {
+    if (e.changedTouches[i].identifier === joystickTouchId) {
       tracking = true;
       break;
     }
@@ -4042,10 +4046,6 @@ function handleTouchEnd(e: TouchEvent) {
       joystickThumb.style.transform = 'translate(-50%, -50%)';
       touchFwd = 0;
       touchTurn = 0;
-    }
-    if (t.identifier === spyglassTouchId) {
-      spyglassTouchId = null;
-      touchSpyglass = false;
     }
   }
 }
@@ -4093,6 +4093,28 @@ if (isMobile) {
   if (ctrl) ctrl.innerHTML = 'Left: Steer &bull; Right: Spyglass &bull; Buttons: Cannons &bull; Codex button';
 
   ui.showMobileCannonButtons(firePort, fireStarboard);
+
+  // Wire skip-roam button (works for both mobile and desktop)
+  const btnSkipRoam = document.getElementById('btn-skip-roam');
+  if (btnSkipRoam) {
+    btnSkipRoam.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      skipRoamPhase();
+    });
+  }
+
+  // Spyglass toggle button (replaces right-half tap-and-hold)
+  const btnSpyglass = document.getElementById('btn-spyglass');
+  if (btnSpyglass && isMobile) {
+    btnSpyglass.style.display = 'flex';
+    btnSpyglass.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (gamePaused) return;
+      touchSpyglass = !touchSpyglass;
+      btnSpyglass.classList.toggle('active', touchSpyglass);
+    }, { passive: false });
+  }
 }
 
 // ===================================================================
@@ -4613,7 +4635,7 @@ function beginPlayTestWave(): void {
   // Announce wave
   ui.showWaveAnnouncement(config.wave, config.bossName !== null);
   waveAnnouncePending = true;
-  waveAnnounceTimer = 1.5;
+  waveAnnounceTimer = 3;
   warDrumsTimer = 0; // Reset war drums timer at wave start
 
   // Weather transition
@@ -4698,6 +4720,8 @@ function resumeRunFromCheckpoint(checkpoint: RunCheckpointV1): void {
   waveCompleteTimer = 0;
   waveAnnouncePending = false;
   waveAnnounceTimer = 0;
+  isRoaming = false;
+  roamTimer = 0;
   beginWaveInProgress = false;
 
   pendingFactionReputation.clear();
@@ -4738,6 +4762,7 @@ function resumeRunFromCheckpoint(checkpoint: RunCheckpointV1): void {
   mapNodes.restoreSnapshot(checkpoint.map);
   factions.applyReputationSnapshot(checkpoint.factionReputation);
   economy.applyState(checkpoint.economy);
+  heatSystem.applyState({ heat: checkpoint.heat ?? 0, maxHeat: checkpoint.maxHeat ?? 0 });
   crew.restoreSnapshot(checkpoint.crew ?? []);
 
   world.dispose();
@@ -4830,6 +4855,7 @@ function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: stri
   mapNodes.startRun(currentRunSeed);
   factions.reset();
   economy.resetRun();
+  heatSystem.resetRun();
   telemetry.resetRun();
   telemetry.track('run_start', {
     seed: currentRunSeed,
@@ -4937,12 +4963,18 @@ async function beginWave() {
       if (!config.enemyTypes.includes('merchant_galleon')) config.enemyTypes.push('merchant_galleon');
     }
 
-    // Reputation tokens reduce hostility — spend 2 to lower armed% by 10%
+    // Heat system: plundering raises heat which increases armed%
+    const heatBonus = heatSystem.getArmedBonus();
+    if (heatBonus > 0) {
+      config.armedPercent = Math.min(1.0, config.armedPercent + heatBonus);
+    }
+
+    // Reputation tokens reduce heat (spend 2 to cool down by 15)
     const econState = economy.getState();
-    if (econState.reputationTokens >= 2 && config.armedPercent > 0) {
+    if (econState.reputationTokens >= 2 && heatSystem.getHeat() > 10) {
       economy.addReputationTokens(-2);
-      config.armedPercent = Math.max(0, config.armedPercent - 0.10);
-      ui.addJournalEntry('Our reputation precedes us — fewer escorts on the horizon.', 'reward');
+      heatSystem.addHeat(-15);
+      ui.addJournalEntry('Our reputation precedes us \u2014 the heat subsides.', 'reward');
     }
 
     // Wave preview — Intel >= 3 reveals enemy types
@@ -4959,7 +4991,7 @@ async function beginWave() {
     // Wave announcement
     ui.showWaveAnnouncement(config.wave, config.bossName !== null);
     waveAnnouncePending = true;
-    waveAnnounceTimer = 1.5;
+    waveAnnounceTimer = 3;
     ui.addJournalEntry(getWaveLogLine(config), config.bossName ? 'warning' : 'neutral');
     telemetry.track('wave_start', {
       wave: config.wave,
@@ -5132,6 +5164,8 @@ async function onWaveComplete() {
     audio.playWaveComplete();
     progression.setFactionReputationSnapshot(factions.getReputationSnapshot());
     const runStats = progression.getRunStats();
+    runStats.maxHeat = heatSystem.getMaxHeat();
+    runStats.finalHeatLevel = heatSystem.getHeatLevelName();
     const unlocks = progression.checkUnlocks(runStats);
     const hostile = progression.getMostHostileFaction();
     const allied = progression.getMostAlliedFaction();
@@ -5243,7 +5277,11 @@ async function onWaveComplete() {
   if (shouldPort) {
     enterPort();
   } else {
-    beginWave();
+    // Enter roam phase — breathing room before next wave
+    isRoaming = true;
+    roamTimer = 0;
+    progression.setState('roaming');
+    ui.showRoamIndicator(progression.getCurrentWave() + 1, progression.isEndlessMode() ? 10 : ROAM_DURATION);
   }
 }
 
@@ -5277,6 +5315,7 @@ function rebuildPlayerShip() {
 function enterPort() {
   gamePaused = true;
   inPort = true;
+  heatSystem.addHeat(-10); // port visit cools heat
   const marketProfile = getPortMarketProfile();
   const harborLabel = marketProfile.context.factionName
     ? `${marketProfile.context.factionName} harbor`
@@ -5475,6 +5514,8 @@ async function onGameOver() {
   ui.clearCaptainLog();
 
   const runStats = progression.getRunStats();
+  runStats.maxHeat = heatSystem.getMaxHeat();
+  runStats.finalHeatLevel = heatSystem.getHeatLevelName();
   const doctrine = getDoctrineById(selectedDoctrineId);
   saveRunToHistory({
     date: new Date().toISOString(),
@@ -5546,6 +5587,7 @@ function restartGame() {
   mapNodes.startRun(currentRunSeed);
   factions.reset();
   economy.resetRun();
+  heatSystem.resetRun();
   telemetry.resetRun();
   telemetry.track('run_restart', {
     reason: 'game_restart',
@@ -5557,6 +5599,8 @@ function restartGame() {
   waveCompleteTimer = 0;
   waveAnnouncePending = false;
   waveAnnounceTimer = 0;
+  isRoaming = false;
+  roamTimer = 0;
   activeWaveConfigV1 = null;
   ui.hideRunSummary();
 
@@ -6111,6 +6155,9 @@ function triggerCapture(m: MerchantV1, _index: number) {
   progression.addScore(reward);
   economy.addSupplies(1);
   if (m.armed) economy.addIntel(1);
+  // Heat system: plundering raises heat → more armed escorts
+  const heatAmount = m.isBoss ? 8 : m.armed ? 3 : 5;
+  heatSystem.addHeat(heatAmount);
   telemetry.track('ship_captured', {
     enemyType: m.enemyType,
     reward,
@@ -6629,6 +6676,8 @@ function updateV2Hud(dt: number) {
   v2HudRefreshTimer = 0.2;
   const econ = economy.getState();
   ui.updateV2Resources(econ.supplies, econ.intel, econ.reputationTokens);
+  const hs = heatSystem.getState();
+  ui.updateHeatMeter(hs.heat, hs.heatLevel, heatSystem.getHeatLevelName());
   const context = getRegionalFactionContext();
   ui.updateV2FactionStatus(context.factionName, context.reputation);
 }
@@ -6637,7 +6686,30 @@ function updateV2Hud(dt: number) {
 //  Wave lifecycle management
 // ===================================================================
 
+function skipRoamPhase() {
+  if (!isRoaming) return;
+  isRoaming = false;
+  ui.hideRoamIndicator();
+  beginWave();
+}
+
 function updateWaveLifecycle(dt: number) {
+  // Roam phase: open water breathing room between waves
+  if (isRoaming) {
+    roamTimer += dt;
+    const roamDecay = progression.isEndlessMode() ? 0.5 : 1;
+    heatSystem.decayHeat(dt, roamDecay); // heat decays during roam (halved in endless)
+    const roamDur = progression.isEndlessMode() ? 10 : ROAM_DURATION;
+    const left = Math.max(0, roamDur - roamTimer);
+    ui.updateRoamTimer(left);
+    if (roamTimer >= roamDur) {
+      isRoaming = false;
+      ui.hideRoamIndicator();
+      beginWave();
+    }
+    return;
+  }
+
   if (waveAnnouncePending) {
     waveAnnounceTimer -= dt;
     if (waveAnnounceTimer <= 0) {
@@ -6649,7 +6721,7 @@ function updateWaveLifecycle(dt: number) {
 
   if (progression.getState() === 'wave_complete') {
     waveCompleteTimer += dt;
-    if (waveCompleteTimer > 1.5) {
+    if (waveCompleteTimer > 2.5) {
       waveCompleteTimer = -999;
       onWaveComplete();
     }
@@ -6658,6 +6730,7 @@ function updateWaveLifecycle(dt: number) {
 
   if (progression.getState() === 'active') {
     waveCompleteTimer = 0;
+    heatSystem.decayHeat(dt, progression.isEndlessMode() ? 0.25 : 0.5); // slower decay during combat (halved again in endless)
 
     // War Drums: periodic drum beat during combat
     if (progression.getPlayerStats().warDrums) {

@@ -401,7 +401,35 @@ export class UI {
   updateWaveCounter(wave: number, shipsLeft: number, shipsTotal: number) {
     if (this.screensaverMode) return;
     if (!this.waveCounter) return;
-    this.waveCounter.textContent = `Wave ${wave} - Ships: ${shipsLeft}/${shipsTotal}`;
+    this.waveCounter.textContent = `W${wave} \u2502 ${shipsLeft}/${shipsTotal} Ships`;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  ROAM PHASE                                                         */
+  /* ------------------------------------------------------------------ */
+
+  private roamNextWave = 0;
+
+  showRoamIndicator(nextWave: number, duration: number) {
+    this.roamNextWave = nextWave;
+    if (!this.waveCounter) return;
+    this.waveCounter.textContent = `Open Waters \u2014 Wave ${nextWave} in ${Math.ceil(duration)}s`;
+    // Show mobile skip button
+    const btn = document.getElementById('btn-skip-roam');
+    if (btn) btn.style.display = 'flex';
+  }
+
+  updateRoamTimer(secondsLeft: number) {
+    if (!this.waveCounter) return;
+    const s = Math.ceil(secondsLeft);
+    this.waveCounter.textContent = s > 0
+      ? `Open Waters \u2014 Wave ${this.roamNextWave} in ${s}s`
+      : `Prepare for battle!`;
+  }
+
+  hideRoamIndicator() {
+    const btn = document.getElementById('btn-skip-roam');
+    if (btn) btn.style.display = 'none';
   }
 
   /* ------------------------------------------------------------------ */
@@ -522,6 +550,7 @@ export class UI {
               <span class="stat-label">Ship Class</span>
               <span class="stat-value">${stats.shipClass.charAt(0).toUpperCase() + stats.shipClass.slice(1)}</span>
             </div>
+            ${stats.finalHeatLevel ? `<div class="stat-row"><span class="stat-label">Notoriety</span><span class="stat-value">${stats.finalHeatLevel}</span></div>` : ''}
             <div class="stat-row" style="border-top:1px solid rgba(255,215,0,0.25);margin-top:4px;padding-top:8px;">
               <span class="stat-label">High Score</span>
               <span class="stat-value">${highScore.toLocaleString()}</span>
@@ -1105,6 +1134,39 @@ export class UI {
       const needed = Math.max(0, max - current);
       const fullRepairCost = Math.ceil(needed / 10) * this.portRepairCostPer10;
       fullRepairBtn.textContent = `Full Repair (${fullRepairCost}g)`;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  HEAT METER                                                         */
+  /* ------------------------------------------------------------------ */
+
+  private heatMeterEl: HTMLElement | null = null;
+  private heatFillEl: HTMLElement | null = null;
+  private heatLevelNameEl: HTMLElement | null = null;
+  private lastHeatValue = -1;
+
+  updateHeatMeter(heat: number, level: number, levelName: string): void {
+    if (this.screensaverMode) return;
+    if (!this.heatMeterEl) this.heatMeterEl = document.getElementById('heat-meter');
+    if (!this.heatFillEl) this.heatFillEl = document.getElementById('heat-fill');
+    if (!this.heatLevelNameEl) this.heatLevelNameEl = document.getElementById('heat-level-name');
+    if (!this.heatMeterEl || !this.heatFillEl) return;
+
+    const rounded = Math.round(heat);
+    if (rounded === this.lastHeatValue) return;
+    this.lastHeatValue = rounded;
+
+    this.heatMeterEl.style.opacity = '1';
+    this.heatFillEl.style.width = `${rounded}%`;
+
+    // Color gradient: blue → amber → orange → red
+    const colors = ['#4a90b8', '#d4a54a', '#d47a2a', '#c44a2a', '#b01a1a', '#b01a1a'];
+    this.heatFillEl.style.backgroundColor = colors[level] ?? '#4a90b8';
+
+    if (this.heatLevelNameEl) {
+      this.heatLevelNameEl.textContent = levelName;
+      this.heatLevelNameEl.style.color = colors[level] ?? 'rgba(220,180,140,0.7)';
     }
   }
 
@@ -2148,6 +2210,10 @@ export class UI {
         ['Time Played', timeStr],
         ['Ship Class', stats.shipClass.charAt(0).toUpperCase() + stats.shipClass.slice(1)],
       ];
+
+      if (stats.finalHeatLevel) {
+        rows.push(['Notoriety', stats.finalHeatLevel]);
+      }
 
       if (typeof v2Meta?.codexCount === 'number') {
         rows.push(['Codex Entries', String(v2Meta.codexCount)]);

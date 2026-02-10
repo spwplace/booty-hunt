@@ -38,6 +38,8 @@ export interface RunCheckpointV1 {
   capturesThisWave: number;
   armedCapturesThisWave: number;
   waveCaptureGold: number;
+  heat?: number;
+  maxHeat?: number;
 }
 
 const RUN_CHECKPOINT_KEY = 'booty-hunt-run-checkpoint-v1';

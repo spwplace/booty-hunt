@@ -18,7 +18,7 @@ export interface EventUpdateResult {
 //  Constants
 // ===================================================================
 
-const EVENT_COOLDOWN = 30; // seconds between events
+const EVENT_COOLDOWN = 60; // seconds between events
 const TREASURE_MAP_CHANCE = 0.10; // per kill
 
 // Kraken
@@ -64,7 +64,7 @@ const SERPENT_ORBIT_MAX = 25;
 const STORM_SURGE_CHANCE = 0.25;
 const STORM_SURGE_WARNING = 5;
 const STORM_SURGE_DAMAGE = 15;
-const STORM_SURGE_SAFE_SPEED = 8;
+const STORM_SURGE_SAFE_SPEED = 5.5;
 
 // Treasure map
 const TREASURE_MAP_GOLD_MIN = 200;
