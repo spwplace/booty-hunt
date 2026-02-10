@@ -1237,6 +1237,53 @@ export class ProgressionSystem {
     };
   }
 
+  /**
+   * Doctrine Fusion Forge — splice a second doctrine into the active one.
+   * Blends starting bonuses (average of both + 5% bonus to the highest stat).
+   * Returns true if fusion succeeded, false if no active doctrine or same id.
+   */
+  fuseDoctrine(secondDoctrine: V2Doctrine): boolean {
+    if (!this.activeDoctrine) return false;
+    if (secondDoctrine.id === this.activeDoctrine.id) return false;
+
+    const a = this.activeDoctrine.startingBonuses;
+    const b = secondDoctrine.startingBonuses;
+
+    // Blend: average the multipliers
+    const blended = {
+      speedMult: (a.speedMult + b.speedMult) / 2,
+      cannonDamageMult: (a.cannonDamageMult + b.cannonDamageMult) / 2,
+      maxHealthMult: (a.maxHealthMult + b.maxHealthMult) / 2,
+    };
+
+    // +5% bonus to whichever stat is highest
+    const stats = [
+      { key: 'speedMult' as const, val: blended.speedMult },
+      { key: 'cannonDamageMult' as const, val: blended.cannonDamageMult },
+      { key: 'maxHealthMult' as const, val: blended.maxHealthMult },
+    ];
+    stats.sort((x, y) => y.val - x.val);
+    blended[stats[0].key] *= 1.05;
+
+    // Apply the fusion bonuses on top of current stats
+    this.stats.maxSpeed *= blended.speedMult / a.speedMult;
+    this.stats.cannonDamage *= blended.cannonDamageMult / a.cannonDamageMult;
+    const healthRatio = this.stats.health / this.stats.maxHealth;
+    this.stats.maxHealth = Math.max(1, Math.round(this.stats.maxHealth * blended.maxHealthMult / a.maxHealthMult));
+    this.stats.health = Math.round(this.stats.maxHealth * healthRatio);
+
+    // Update the stored doctrine
+    this.activeDoctrine = {
+      ...this.activeDoctrine,
+      id: `${this.activeDoctrine.id}+${secondDoctrine.id}`,
+      name: `${this.activeDoctrine.name} × ${secondDoctrine.name}`,
+      summary: `Fused doctrine: ${this.activeDoctrine.summary} + ${secondDoctrine.summary}`,
+      startingBonuses: blended,
+    };
+
+    return true;
+  }
+
   unlockCodexEntry(entryId: string): boolean {
     const id = entryId.trim();
     if (!id) return false;
@@ -1252,6 +1299,31 @@ export class ProgressionSystem {
 
   getCodexEntries(): string[] {
     return [...this.metaStatsV1.v2CodexDiscovered];
+  }
+
+  /**
+   * Living Codex Campaign — milestone-based unlocks.
+   * Returns newly unlocked mechanic IDs based on codex discovery count.
+   */
+  getCodexMilestoneUnlocks(): string[] {
+    const count = this.metaStatsV1.v2CodexDiscovered.length;
+    const unlocks: string[] = [];
+    // 5 entries: new event card "cursed_compass"
+    if (count >= 5) unlocks.push('event_cursed_compass');
+    // 10 entries: new node type "shrine" available in map generation
+    if (count >= 10) unlocks.push('node_shrine');
+    // 15 entries: doctrine variant "scholar's gambit"
+    if (count >= 15) unlocks.push('doctrine_scholars_gambit');
+    // 20 entries: special encounter "library_of_the_deep"
+    if (count >= 20) unlocks.push('encounter_library_deep');
+    // 30 entries: legendary upgrade "tome_of_tides"
+    if (count >= 30) unlocks.push('upgrade_tome_of_tides');
+    return unlocks;
+  }
+
+  /** Check if a specific codex milestone mechanic has been unlocked */
+  isCodexMechanicUnlocked(mechanicId: string): boolean {
+    return this.getCodexMilestoneUnlocks().includes(mechanicId);
   }
 
   setFactionReputationSnapshot(snapshot: Record<string, number>): void {

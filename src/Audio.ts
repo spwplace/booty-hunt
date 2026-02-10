@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { ShantyEngine } from './ShantyEngine';
 
 // ============================================================================
 //  BOOTY HUNT — Procedural Audio Engine
@@ -13,6 +14,7 @@ class Audio {
   private master: GainNode | null = null;
   private initialized = false;
   private muted = false;
+  private shantyEngine: ShantyEngine | null = null;
   private previousVolume = 1.0;
 
   // --- Separate volume control nodes ---
@@ -250,14 +252,17 @@ class Audio {
   private startShantyLoop(): void {
     const ctx = this.ctx!;
     this.musicGain = ctx.createGain();
-    this.musicGain.gain.value = 0.08;
+    this.musicGain.gain.value = this.shantyEngine ? 0 : 0.08;
     this.musicGain.connect(this.musicGainNode!);
     this.musicPlaying = true;
-    this.scheduleShantyBar(0);
+    if (!this.shantyEngine) {
+      this.scheduleShantyBar(0);
+    }
   }
 
   private scheduleShantyBar(barIndex: number): void {
     if (!this.ctx || !this.musicPlaying) return;
+    if (this.shantyEngine) return; // engine handles music
 
     // --- Event mode: Kraken (A minor, 120 BPM, heavy bass) ---
     if (this.eventMode === 'kraken') {
@@ -2210,6 +2215,7 @@ class Audio {
   setBossMode(active: boolean): void {
     if (this.bossMode === active) return;
     this.bossMode = active;
+    if (this.shantyEngine) return; // engine handles music modes
 
     // Restart the shanty loop to pick up the new mode immediately
     if (this.musicPlaying && this.ctx) {
@@ -2233,6 +2239,7 @@ class Audio {
   setPortMode(active: boolean): void {
     if (this.portMode === active) return;
     this.portMode = active;
+    if (this.shantyEngine) return; // engine handles music modes
 
     if (!this.ctx || !this.musicGain) return;
     const now = this.ctx.currentTime;
@@ -2268,6 +2275,7 @@ class Audio {
   setEventMode(type: EventType | null): void {
     if (this.eventMode === type) return;
     this.eventMode = type;
+    if (this.shantyEngine) return; // engine handles music modes
 
     // Restart the shanty loop to pick up the new mode immediately
     if (this.musicPlaying && this.ctx) {
@@ -2454,11 +2462,48 @@ class Audio {
   }
 
   // =========================================================================
+  //  SHANTY ENGINE: Accessors & integration
+  // =========================================================================
+
+  /** Get the AudioContext (null if not initialized). */
+  getAudioContext(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /** Get the music bus gain node (null if not initialized). */
+  getMusicBus(): GainNode | null {
+    return this.musicGainNode;
+  }
+
+  /** Get the SFX bus gain node (null if not initialized). */
+  getSfxBus(): GainNode | null {
+    return this.sfxGain;
+  }
+
+  /** Attach the ShantyEngine. When attached, old melody is silenced. */
+  setShantyEngine(engine: ShantyEngine | null): void {
+    this.shantyEngine = engine;
+    // Silence the old melody gain when engine takes over
+    if (engine && this.musicGain && this.ctx) {
+      this.musicGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.5);
+    } else if (!engine && this.musicGain && this.ctx) {
+      this.musicGain.gain.linearRampToValueAtTime(0.08, this.ctx.currentTime + 0.5);
+    }
+  }
+
+  /** Check if ShantyEngine is attached. */
+  hasShantyEngine(): boolean {
+    return this.shantyEngine !== null;
+  }
+
+  // =========================================================================
   //  CLEANUP
   // =========================================================================
 
   /** Stop all audio and release resources. */
   dispose(): void {
+    this.shantyEngine?.dispose();
+    this.shantyEngine = null;
     this.musicPlaying = false;
     if (this.musicTimeoutId !== null) {
       clearTimeout(this.musicTimeoutId);

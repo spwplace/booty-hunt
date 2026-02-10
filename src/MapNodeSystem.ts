@@ -1,6 +1,6 @@
 import type { V2ContentRegistry, V2Region } from './V2Content';
 
-export type MapNodeType = 'combat' | 'event' | 'port' | 'contract' | 'boss';
+export type MapNodeType = 'combat' | 'event' | 'port' | 'contract' | 'boss' | 'forge';
 
 export interface MapNode {
   id: string;
@@ -27,6 +27,18 @@ export interface MapNodeSnapshot {
   seed: number;
   currentNodeId: string | null;
   visitedNodeIds: string[];
+  scars?: MapScar[];
+}
+
+// War Table: persistent scars from player choices
+export type MapScarType = 'burned_port' | 'faction_dominance' | 'hazard_stack';
+
+export interface MapScar {
+  nodeId: string;
+  type: MapScarType;
+  label: string;
+  factionId?: string;
+  addedHazard?: string;
 }
 
 // Node type pools per act (weighted — more entries = higher chance)
@@ -45,6 +57,7 @@ export class MapNodeSystem {
   private currentNodeId: string | null = null;
   private nodeMap: Map<string, MapNode> = new Map();
   private seed = 0;
+  private scars: MapScar[] = [];
 
   constructor(content: V2ContentRegistry) {
     this.content = content;
@@ -54,6 +67,7 @@ export class MapNodeSystem {
     this.acts = [];
     this.currentNodeId = null;
     this.nodeMap = new Map();
+    this.scars = [];
   }
 
   /* ------------------------------------------------------------------ */
@@ -129,6 +143,11 @@ export class MapNodeSystem {
           type = 'port';
         }
         if (type === 'port') portPlaced = true;
+
+        // Rare forge node in Act 2-3 (10% chance to replace a combat node)
+        if (actNum >= 2 && type === 'combat' && L >= 2 && rng() < 0.10) {
+          type = 'forge';
+        }
 
         layerNodes.push(this.makeNode(actNum, L, i, type, regionId));
       }
@@ -242,6 +261,7 @@ export class MapNodeSystem {
       seed: this.seed,
       currentNodeId: this.currentNodeId,
       visitedNodeIds,
+      scars: this.scars.length > 0 ? [...this.scars] : undefined,
     };
   }
 
@@ -256,6 +276,60 @@ export class MapNodeSystem {
       const current = this.nodeMap.get(snapshot.currentNodeId);
       if (current) current.visited = true;
     }
+    this.scars = Array.isArray(snapshot.scars) ? [...snapshot.scars] : [];
+  }
+
+  // -----------------------------------------------------------------------
+  // War Table: persistent map scars
+  // -----------------------------------------------------------------------
+
+  addScar(scar: MapScar): void {
+    // Prevent duplicate scars on the same node of the same type
+    if (this.scars.some(s => s.nodeId === scar.nodeId && s.type === scar.type)) return;
+    this.scars.push(scar);
+  }
+
+  getScars(): MapScar[] {
+    return [...this.scars];
+  }
+
+  getScarsForNode(nodeId: string): MapScar[] {
+    return this.scars.filter(s => s.nodeId === nodeId);
+  }
+
+  hasNodeScar(nodeId: string, type: MapScarType): boolean {
+    return this.scars.some(s => s.nodeId === nodeId && s.type === type);
+  }
+
+  /** Burn a port node (player raided it) — converts port to combat for future visits */
+  burnPort(nodeId: string): void {
+    const node = this.nodeMap.get(nodeId);
+    if (!node || node.type !== 'port') return;
+    this.addScar({
+      nodeId,
+      type: 'burned_port',
+      label: 'Burned Port',
+    });
+  }
+
+  /** Add faction dominance scar (faction took over this node) */
+  addFactionDominance(nodeId: string, factionId: string, factionName: string): void {
+    this.addScar({
+      nodeId,
+      type: 'faction_dominance',
+      label: `${factionName} Territory`,
+      factionId,
+    });
+  }
+
+  /** Stack an additional hazard onto a node */
+  addHazardStack(nodeId: string, hazardId: string, hazardName: string): void {
+    this.addScar({
+      nodeId,
+      type: 'hazard_stack',
+      label: hazardName,
+      addedHazard: hazardId,
+    });
   }
 
   /** Get a node by ID. */
@@ -287,6 +361,7 @@ export class MapNodeSystem {
       case 'port': return `Act ${act} Port Call`;
       case 'contract': return `Act ${act} Contract`;
       case 'boss': return `Act ${act} Flagship Clash`;
+      case 'forge': return `Act ${act} Doctrine Forge`;
     }
   }
 

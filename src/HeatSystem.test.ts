@@ -77,4 +77,55 @@ describe('HeatSystem', () => {
     expect(heat2.getHeatLevel()).toBe(3);
     expect(heat2.getArmedBonus()).toBe(0.14);
   });
+
+  // Infamy Singularity tests
+  it('no effects at low heat', () => {
+    heat.addHeat(20);
+    expect(heat.shouldMutateWeather()).toBe(false);
+    expect(heat.shouldCorruptNode()).toBe(false);
+    expect(heat.isEmbargoActive()).toBe(false);
+    expect(heat.getEventPressureBonus()).toBe(0);
+    expect(heat.getBountyHunterCount()).toBe(0);
+    expect(heat.getActiveEffects()).toHaveLength(0);
+  });
+
+  it('Wanted (31+): weather mutation and event pressure', () => {
+    heat.addHeat(35);
+    expect(heat.shouldMutateWeather()).toBe(true);
+    expect(heat.getWeatherMutationChance()).toBeGreaterThan(0);
+    expect(heat.shouldCorruptNode()).toBe(false);
+    expect(heat.isEmbargoActive()).toBe(false);
+    expect(heat.getEventPressureBonus()).toBe(0.05);
+    expect(heat.getBountyHunterCount()).toBe(0);
+    expect(heat.getActiveEffects()).toHaveLength(2);
+    expect(heat.getActiveEffects()[0].tier).toBe('wanted');
+  });
+
+  it('Hunted (51+): node corruption and bounty hunters', () => {
+    heat.addHeat(55);
+    expect(heat.shouldCorruptNode()).toBe(true);
+    expect(heat.getNodeCorruptionChance()).toBe(0.12);
+    expect(heat.isEmbargoActive()).toBe(false);
+    expect(heat.getBountyHunterCount()).toBe(1);
+    expect(heat.getActiveEffects()).toHaveLength(4);
+  });
+
+  it('Infamous (71+): port embargo', () => {
+    heat.addHeat(75);
+    expect(heat.isEmbargoActive()).toBe(true);
+    expect(heat.getBountyHunterCount()).toBe(2);
+    expect(heat.getNodeCorruptionChance()).toBe(0.25);
+    expect(heat.getActiveEffects()).toHaveLength(5);
+  });
+
+  it('Legendary (91+): maximum effects', () => {
+    heat.addHeat(95);
+    expect(heat.isEmbargoActive()).toBe(true);
+    expect(heat.getBountyHunterCount()).toBe(3);
+    expect(heat.getNodeCorruptionChance()).toBe(0.40);
+    expect(heat.getWeatherMutationChance()).toBe(0.08);
+    expect(heat.getEventPressureBonus()).toBe(0.30);
+    expect(heat.getActiveEffects()).toHaveLength(6);
+    expect(heat.getActiveEffects().some(e => e.id === 'legendary_fury')).toBe(true);
+  });
 });

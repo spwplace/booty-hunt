@@ -161,11 +161,28 @@ export type CrewRole =
   | 'bosun'
   | 'quartermaster';
 
+export type CrewPersonality =
+  | 'bloodthirsty'
+  | 'cautious'
+  | 'greedy'
+  | 'loyal'
+  | 'superstitious'
+  | 'scholarly'
+  | 'ambitious'
+  | 'stoic'
+  | 'reckless'
+  | 'merciful'
+  | 'paranoid'
+  | 'cunning';
+
 export interface CrewMember {
   role: CrewRole;
   level: number;
   maxLevel: number;
   name: string;
+  personality?: CrewPersonality;
+  loyalty?: number;  // 0-100, default 60
+  morale?: number;   // 0-100, default 50
 }
 
 export interface CrewBonus {
@@ -395,6 +412,7 @@ export interface MerchantV1 {
   fleeTimer: number;
   formationIndex: number;
   formationLeaderId: number;
+  burnTimer: number; // fire DoT from chain-reaction fire spread
 }
 
 // ===================================================================

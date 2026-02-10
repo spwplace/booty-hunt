@@ -3,6 +3,8 @@ import type { MapNodeSnapshot } from './MapNodeSystem';
 import type { ProgressionRunSnapshot } from './Progression';
 import type { RunEconomyState } from './EconomySystem';
 import type { CrewMemberSnapshot } from './Crew';
+import type { LeviathanState } from './Events';
+import type { CataclysmState } from './Cataclysm';
 
 export interface RunCheckpointContractSnapshot {
   wave: number;
@@ -40,6 +42,8 @@ export interface RunCheckpointV1 {
   waveCaptureGold: number;
   heat?: number;
   maxHeat?: number;
+  leviathanState?: LeviathanState;
+  cataclysmState?: CataclysmState;
 }
 
 const RUN_CHECKPOINT_KEY = 'booty-hunt-run-checkpoint-v1';

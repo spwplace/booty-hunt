@@ -40,6 +40,13 @@ import { FactionSystem } from './FactionSystem';
 import { EconomySystem } from './EconomySystem';
 import { HeatSystem } from './HeatSystem';
 import { TelemetrySystem } from './TelemetrySystem';
+import { GhostTapeRecorder, ACTION_PORT_FIRE, ACTION_STARBOARD_FIRE, ACTION_CAPTURING, ACTION_TOOK_DAMAGE, ACTION_KILLED_ENEMY, ACTION_BOSS_ACTIVE } from './GhostTape';
+import { GhostReplaySystem } from './GhostReplay';
+import { CataclysmSystem } from './Cataclysm';
+import { apiClient } from './ApiClient';
+import type { ChoiceContext } from './Crew';
+import { ShantyEngine } from './ShantyEngine';
+import type { ShantyGameState, ShantyPhase, ShantyEventOverride } from './ShantyEngine';
 import {
   saveRunCheckpoint,
   loadRunCheckpoint,
@@ -334,7 +341,58 @@ const factions = new FactionSystem(v2Content);
 const economy = new EconomySystem();
 const heatSystem = new HeatSystem();
 const telemetry = new TelemetrySystem();
+const ghostTape = new GhostTapeRecorder();
+const ghostReplay = new GhostReplaySystem();
+const cataclysm = new CataclysmSystem();
+let shantyEngine: ShantyEngine | null = null;
 let accessibilityMotionIntensity = 1;
+
+function initShantyEngine(): void {
+  if (shantyEngine) return;
+  const ctx = audio.getAudioContext();
+  const musicBus = audio.getMusicBus();
+  if (!ctx || !musicBus) return;
+  shantyEngine = new ShantyEngine(ctx, musicBus);
+  audio.setShantyEngine(shantyEngine);
+  shantyEngine.start();
+}
+
+function buildShantyState(): ShantyGameState {
+  const crewMembers = crew.getCrew();
+  const avgMorale = crewMembers.length > 0
+    ? crewMembers.reduce((s, m) => s + (m.morale ?? 50), 0) / crewMembers.length
+    : 50;
+  const avgLoyalty = crewMembers.length > 0
+    ? crewMembers.reduce((s, m) => s + (m.loyalty ?? 60), 0) / crewMembers.length
+    : 60;
+
+  let phase: ShantyPhase = 'sailing';
+  const pState = progression.getState();
+  if (!gameStarted || screensaverActive) phase = 'title';
+  else if (inPort) phase = 'port';
+  else if (currentBoss) phase = 'boss';
+  else if (pState === 'active') phase = 'combat';
+  else phase = 'sailing';
+
+  const currentEvt = events.getCurrentEvent();
+  let eventOverride: ShantyEventOverride = null;
+  if (currentEvt?.active) {
+    if (currentEvt.type === 'kraken') eventOverride = 'kraken';
+    else if (currentEvt.type === 'ghost_ship_event') eventOverride = 'ghost_ship_event';
+    else if (currentEvt.type === 'sea_serpent') eventOverride = 'sea_serpent';
+  }
+
+  return {
+    phase,
+    morale: avgMorale,
+    loyalty: avgLoyalty,
+    heat: heatSystem.getHeat(),
+    mutinyRisk: crew.getMutinyRisks().length > 0,
+    eventOverride,
+    weatherIntensity: weather.getCurrentConfig().windIntensity,
+    culture: crew.getDominantCulture(),
+  };
+}
 
 function motionScale(value: number): number {
   return Math.max(0, value * accessibilityMotionIntensity);
@@ -957,7 +1015,10 @@ function getRegionalEventPressureMultiplier(): number {
       break;
   }
 
-  return clamp(multiplier, 0.65, 1.55);
+  // Infamy Singularity: heat increases event pressure
+  multiplier += heatSystem.getEventPressureBonus();
+
+  return clamp(multiplier, 0.65, 2.0);
 }
 
 function applyFactionReputationDelta(factionId: string | null, delta: number, reason: string): void {
@@ -1156,13 +1217,23 @@ function updateContractObjectiveTargetLabel(objective: ActiveContractObjective):
   objective.targetLabel = `${objective.target} ${objective.progressLabel || 'captures'}`;
 }
 
-function showRunChoicePrompt(title: string, detail: string, options: ChoicePromptOption[]): Promise<string> {
+function showRunChoicePrompt(title: string, detail: string, options: ChoicePromptOption[], crewContext?: ChoiceContext): Promise<string> {
   const econ = economy.getState();
+  // Parliament of Knives: show crew opinions on choices
+  let crewOpinionHints: string[] | undefined;
+  if (crewContext) {
+    const opinions = crew.getOpinions(crewContext);
+    if (opinions.length > 0) {
+      crewOpinionHints = opinions
+        .filter(o => o.opinion !== 'neutral')
+        .map(o => `${o.member.name} (${o.member.role}): ${o.opinion === 'approve' ? '\u2705' : '\u274c'}`);
+    }
+  }
   return ui.showChoicePrompt(title, detail, options, {
     supplies: econ.supplies,
     intel: econ.intel,
     reputationTokens: econ.reputationTokens,
-  });
+  }, crewOpinionHints);
 }
 
 async function resolveContractNegotiationChoice(objective: ActiveContractObjective | null): Promise<void> {
@@ -1195,6 +1266,7 @@ async function resolveContractNegotiationChoice(objective: ActiveContractObjecti
     `${objective.factionName} Contract`,
     `Objective: ${objective.targetLabel}. Reward: ${formatContractRewardLine(objective)}. Penalty: ${formatContractPenaltyLine(objective) || 'None'}.`,
     options,
+    'attack_armed',
   );
 
   switch (choice) {
@@ -3317,6 +3389,7 @@ function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
     fleeTimer: props.fleeTimer,
     formationIndex: props.formationIndex,
     formationLeaderId: props.formationLeaderId,
+    burnTimer: 0,
   };
 
   merchants.push(m);
@@ -3330,6 +3403,7 @@ function spawnEnemy(enemyType: EnemyType, isBoss: boolean) {
     ui.addJournalEntry(`Enemy flagship sighted: ${bossName}.`, 'warning');
     audio.playBossWarning();
     audio.setBossMode(true);
+    shantyEngine?.onBossApproaching();
   }
 }
 
@@ -3367,6 +3441,7 @@ const pendingFollowupChoices = new Map<string, number>();
 let codexOpen = false;
 let codexResumePausedState = false;
 let runSetupOpen = false;
+let ghostActions = 0; // bitfield accumulated per ghost tape sample
 let selectedRunShipClass: ShipClass = 'brigantine';
 let selectedDoctrineId = v2Content.data.doctrines[0]?.id ?? '';
 let beginWaveInProgress = false;
@@ -3404,6 +3479,8 @@ function buildRunCheckpoint(): RunCheckpointV1 | null {
     waveCaptureGold,
     heat: heatSystem.getHeat(),
     maxHeat: heatSystem.getMaxHeat(),
+    leviathanState: events.isLeviathanActive() ? events.getLeviathanState() : undefined,
+    cataclysmState: cataclysm.isActive() ? cataclysm.getState() : undefined,
   };
 }
 
@@ -3413,6 +3490,29 @@ function saveRunCheckpointNow(): void {
   if (saveRunCheckpoint(checkpoint)) {
     refreshResumeButton();
   }
+}
+
+/** Fire-and-forget: encode ghost tape + submit run to server */
+function submitRunToServer(runStats: RunStats, victory: boolean): void {
+  if (!apiClient.isConfigured()) return;
+  const doctrine = getDoctrineById(selectedDoctrineId);
+  void ghostTape.encode(currentRunSeed).then((ghostTapeData) => {
+    void apiClient.submitRun({
+      seed: currentRunSeed,
+      shipClass: runStats.shipClass,
+      doctrineId: doctrine?.id ?? 'none',
+      score: runStats.gold,
+      waves: runStats.wavesCompleted,
+      victory,
+      shipsDestroyed: runStats.shipsDestroyed,
+      damageDealt: runStats.damageDealt,
+      maxCombo: runStats.maxCombo,
+      timePlayed: runStats.timePlayed,
+      maxHeat: heatSystem.getMaxHeat(),
+      ghostTape: ghostTapeData,
+      playerName: 'Anonymous',
+    });
+  });
 }
 
 function resumeSavedRunIfAvailable(): void {
@@ -3873,11 +3973,13 @@ window.addEventListener('wheel', (e) => {
 function firePort() {
   if (gamePaused) return;
   if (!combat.canFirePort) return;
+  ghostActions |= ACTION_PORT_FIRE;
   const stats = progression.getPlayerStats();
   const count = stats.fullBroadside ? 5 : 3;
   combat.fireBroadside(playerPos, playerAngle, 'port', stats.cannonDamage, playerSpeed, count);
   audio.playCannon();
   audio.playMuzzleBlast();
+  shantyEngine?.onCannonFired();
 
   // Neptune's Wrath charge indicator
   if (combat.neptunesWrathActive) {
@@ -3901,11 +4003,13 @@ function firePort() {
 function fireStarboard() {
   if (gamePaused) return;
   if (!combat.canFireStarboard) return;
+  ghostActions |= ACTION_STARBOARD_FIRE;
   const stats = progression.getPlayerStats();
   const count = stats.fullBroadside ? 5 : 3;
   combat.fireBroadside(playerPos, playerAngle, 'starboard', stats.cannonDamage, playerSpeed, count);
   audio.playCannon();
   audio.playMuzzleBlast();
+  shantyEngine?.onCannonFired();
 
   // Neptune's Wrath charge indicator
   if (combat.neptunesWrathActive) {
@@ -3950,7 +4054,7 @@ function handleTouchStart(e: TouchEvent) {
   if (runSetupOpen) return;
   if (!gameStarted) {
     const target = e.target as HTMLElement;
-    if (target.closest('#screensaver-btn, #resume-btn, #editor-btn, #history-btn')) return;
+    if (target.closest('#screensaver-btn, #resume-btn, #editor-btn, #history-btn, #leaderboard-btn')) return;
     if (!editorMode) {
       e.preventDefault();
       openRunSetup();
@@ -4060,7 +4164,7 @@ window.addEventListener('mousedown', (e) => {
     return;
   }
   const target = e.target as HTMLElement;
-  if (target.closest('#screensaver-btn, #resume-btn, #editor-btn, #history-btn')) return;
+  if (target.closest('#screensaver-btn, #resume-btn, #editor-btn, #history-btn, #leaderboard-btn')) return;
   if (!gameStarted && !runSetupOpen && !editorMode && target.closest('#title')) {
     openRunSetup();
   }
@@ -4150,6 +4254,7 @@ function startScreensaver() {
   if (journalEl) journalEl.classList.remove('show');
 
   audio.init();
+  initShantyEngine();
 
   // Hide title
   const title = document.getElementById('title');
@@ -4397,6 +4502,32 @@ if (resumeBtn) {
     e.stopPropagation();
     resumeSavedRunIfAvailable();
   });
+}
+const leaderboardBtn = document.getElementById('leaderboard-btn');
+if (leaderboardBtn) {
+  leaderboardBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (apiClient.isConfigured()) {
+      void apiClient.getLeaderboard('global').then((entries) => {
+        if (entries) {
+          ui.showLeaderboard(entries.map((e, i) => ({
+            rank: i + 1,
+            playerName: e.playerName,
+            score: e.score,
+            waves: e.waves,
+            shipClass: e.shipClass,
+            victory: e.victory,
+          })));
+        }
+      });
+    } else {
+      ui.addJournalEntry('Leaderboard requires a server connection.', 'warning');
+    }
+  });
+  // Hide leaderboard button if no API configured
+  if (!apiClient.isConfigured()) {
+    leaderboardBtn.style.display = 'none';
+  }
 }
 const codexToggleBtn = document.getElementById('codex-toggle');
 if (codexToggleBtn) {
@@ -4803,6 +4934,7 @@ function resumeRunFromCheckpoint(checkpoint: RunCheckpointV1): void {
   showGameplayHudImmediate();
   weather.transitionTo(activeWaveConfigV1.weather, 1);
   audio.init();
+  initShantyEngine();
   audio.setWeatherIntensity(weather.getCurrentConfig().windIntensity);
   spawnWaveFleet();
   saveRunCheckpointNow();
@@ -4846,6 +4978,7 @@ function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: stri
   camLookAt.set(0, 0, 0);
 
   audio.init();
+  initShantyEngine();
 
   // Generate world islands and feed reef data to ocean shader
   world.generateIslands();
@@ -4856,6 +4989,24 @@ function startGame(shipClass: ShipClass = selectedRunShipClass, doctrineId: stri
   factions.reset();
   economy.resetRun();
   heatSystem.resetRun();
+  ghostTape.reset();
+  ghostReplay.dispose();
+  cataclysm.reset();
+
+  // Restart shanty engine for new run
+  if (shantyEngine) {
+    shantyEngine.stop();
+    shantyEngine.start();
+  }
+
+  // Tide Calendar: fetch weekly omen (fire-and-forget, won't block startup)
+  if (apiClient.isConfigured()) {
+    void apiClient.getTideOmen().then((omen) => {
+      if (omen) {
+        ui.addJournalEntry(`Tide omen this week: ${omen.omenName}.`, 'mystic');
+      }
+    });
+  }
   telemetry.resetRun();
   telemetry.track('run_start', {
     seed: currentRunSeed,
@@ -4967,6 +5118,50 @@ async function beginWave() {
     const heatBonus = heatSystem.getArmedBonus();
     if (heatBonus > 0) {
       config.armedPercent = Math.min(1.0, config.armedPercent + heatBonus);
+    }
+
+    // Infamy Singularity: heat-driven weather mutation
+    if (heatSystem.shouldMutateWeather() && Math.random() < heatSystem.getWeatherMutationChance()) {
+      config.weather = 'stormy';
+      ui.addJournalEntry('The sea turns against us — infamy draws storms.', 'warning');
+    }
+
+    // Infamy Singularity: bounty hunters add extra armed escorts
+    const bountyHunters = heatSystem.getBountyHunterCount();
+    if (bountyHunters > 0) {
+      config.totalShips += bountyHunters;
+      config.armedPercent = Math.min(1.0, config.armedPercent + bountyHunters * 0.15);
+      if (!config.enemyTypes.includes('escort_frigate')) config.enemyTypes.push('escort_frigate');
+      ui.addJournalEntry(`${bountyHunters} bounty hunter${bountyHunters > 1 ? 's' : ''} on our trail!`, 'warning');
+    }
+
+    // Mutiny check: crew with low loyalty + morale may desert
+    const mutinyResult = crew.checkMutiny();
+    if (mutinyResult) {
+      const stolen = Math.min(mutinyResult.goldStolen, progression.getScore());
+      if (stolen > 0) progression.addScore(-stolen);
+      crew.reduceMorale(10);
+      ui.addJournalEntry(
+        `${mutinyResult.mutineer.name} the ${mutinyResult.mutineer.role} deserted, stealing ${stolen} gold!`,
+        'warning',
+      );
+      ui.updateCrewHUD(crew.getCrew().map(c => ({
+        role: c.role,
+        level: c.level,
+        icon: CREW_ROLE_CONFIGS[c.role].icon,
+      })));
+    }
+
+    // Cataclysm: activate boss wave spectacles
+    const cataclysmCfg = cataclysm.startForWave(config.wave);
+    if (cataclysmCfg) {
+      config.weather = cataclysmCfg.weatherOverride;
+      ui.addJournalEntry(`The ${cataclysmCfg.type} begins — brace yourselves!`, 'warning');
+    }
+
+    // Leviathan chain hunt: check for leviathan spawn
+    if (events.trySpawnLeviathan(config.wave)) {
+      ui.addJournalEntry('A wounded leviathan stirs beneath the waves...', 'mystic');
     }
 
     // Reputation tokens reduce heat (spend 2 to cool down by 15)
@@ -5084,6 +5279,15 @@ function spawnWaveFleet() {
   // Organize navy_warship formations
   EnemyAISystem.updateFormation(merchants);
 
+  // Cataclysm: boost enemy speed during spectacles
+  const catEnemySpd = cataclysm.getEnemySpeedMultiplier();
+  if (catEnemySpd !== 1) {
+    for (const m of merchants) {
+      m.speed *= catEnemySpd;
+      m.baseSpeed *= catEnemySpd;
+    }
+  }
+
   ui.updateWaveCounter(config.wave, config.totalShips, config.totalShips);
 }
 
@@ -5186,6 +5390,10 @@ async function onWaveComplete() {
       damageDealt: runStats.damageDealt,
       timePlayed: runStats.timePlayed,
     });
+
+    // Submit run to server (fire-and-forget)
+    submitRunToServer(runStats, true);
+
     ui.showRunSummary(runStats, unlocks, {
       codexCount: progression.getCodexEntryCount(),
       doctrineName: doctrine?.name ?? null,
@@ -5251,6 +5459,12 @@ async function onWaveComplete() {
   }
 
   if (nextNode) {
+    // Infamy Singularity: heat can corrupt map nodes (add hazard scar)
+    if (heatSystem.shouldCorruptNode() && Math.random() < heatSystem.getNodeCorruptionChance()) {
+      mapNodes.addHazardStack(nextNode.id, 'infamy_corruption', 'Infamy Corruption');
+      ui.addJournalEntry('Our infamy warps the waters ahead — expect trouble.', 'warning');
+    }
+
     telemetry.track('map_node_advance', {
       nextNodeId: nextNode.id,
       nextNodeType: nextNode.type,
@@ -5268,6 +5482,39 @@ async function onWaveComplete() {
       }
     } else {
       EnemyAISystem.resetPressureProfile();
+    }
+  }
+
+  // Doctrine Fusion Forge: rare map node lets player splice doctrines
+  if (nextNode?.type === 'forge') {
+    const allDoctrines = v2Content.data.doctrines;
+    const activeDoctrine = progression.getActiveDoctrine();
+    const fusionOptions = allDoctrines
+      .filter(d => d.id !== activeDoctrine?.id)
+      .slice(0, 3);
+    if (fusionOptions.length > 0) {
+      const forgeChoiceOptions: ChoicePromptOption[] = [
+        ...fusionOptions.map(d => ({
+          id: d.id,
+          label: `Fuse: ${d.name}`,
+          detail: d.summary,
+          benefitHint: formatDoctrineBonusLabel(d),
+        })),
+        { id: 'skip', label: 'Leave the Forge', detail: 'Pass on doctrine fusion.', benefitHint: 'No change' },
+      ];
+      const forgeChoice = await showRunChoicePrompt(
+        'Doctrine Fusion Forge',
+        'A mysterious forge offers to splice your doctrine with another. Choose wisely.',
+        forgeChoiceOptions,
+      );
+      if (forgeChoice !== 'skip') {
+        const secondDoctrine = allDoctrines.find(d => d.id === forgeChoice);
+        if (secondDoctrine && progression.fuseDoctrine(secondDoctrine)) {
+          const fused = progression.getActiveDoctrine();
+          ui.addJournalEntry(`Doctrines fused! Now sailing under: ${fused?.name ?? 'Hybrid Doctrine'}.`, 'mystic');
+          syncUpgradesToCombat();
+        }
+      }
     }
   }
 
@@ -5316,6 +5563,23 @@ function enterPort() {
   gamePaused = true;
   inPort = true;
   heatSystem.addHeat(-10); // port visit cools heat
+
+  // Infamy Singularity: embargo blocks port access at extreme heat
+  if (heatSystem.isEmbargoActive()) {
+    ui.addJournalEntry('The harbor is blockaded — our infamy precedes us. No port today.', 'warning');
+    gamePaused = false;
+    inPort = false;
+    isRoaming = true;
+    roamTimer = 0;
+    progression.setState('roaming');
+    ui.showRoamIndicator(progression.getCurrentWave() + 1, ROAM_DURATION);
+    return;
+  }
+
+  // Crew morale boost for port visit
+  crew.boostMorale(8);
+  crew.applyChoiceOutcome('port_visit');
+
   const marketProfile = getPortMarketProfile();
   const harborLabel = marketProfile.context.factionName
     ? `${marketProfile.context.factionName} harbor`
@@ -5492,6 +5756,7 @@ async function onGameOver() {
     exitPlayTestMode();
     return;
   }
+  shantyEngine?.stop();
   beginWaveInProgress = false;
   ui.hideChoicePrompt();
   closeCodex();
@@ -5530,6 +5795,10 @@ async function onGameOver() {
     damageDealt: runStats.damageDealt,
     timePlayed: runStats.timePlayed,
   });
+
+  // Submit run to server (fire-and-forget)
+  submitRunToServer(runStats, false);
+
   await ui.showGameOver(
     runStats,
     progression.getHighScore(),
@@ -5610,6 +5879,9 @@ function restartGame() {
   ocean.setReefPositions(world.getReefData());
   crew.reset();
   events.reset();
+  ghostTape.reset();
+  ghostReplay.dispose();
+  cataclysm.reset();
 
   islandDiscoveryScanTimer = 0;
   discoveredIslandSeeds.clear();
@@ -5983,12 +6255,39 @@ function updateMerchants(dt: number) {
           }
         }
 
+        // Chain-Reaction: fire spread to nearby ships
+        for (const other of merchants) {
+          if (other === m || other.state === 'sinking') continue;
+          const dist = m.pos.distanceTo(other.pos);
+          if (dist < explResult.aoeRadius * 1.5) {
+            other.burnTimer += 4; // 4 seconds of fire DoT
+            fireEffect.emit(other.pos, 10);
+            // Chain explosion: other fire ships detonate
+            if (other.enemyType === 'fire_ship' && other.hp > 0) {
+              other.hp = 0;
+            }
+          }
+        }
+
         // Sink the fire ship
         m.state = 'sinking';
         m.sinkTimer = 0;
         m.sinkPhase = 0;
         m.speed = 0;
         if (!screensaverActive) progression.onShipDestroyed();
+        continue;
+      }
+    }
+
+    // Chain-Reaction: fire DoT from burn timer
+    if (m.burnTimer > 0) {
+      m.burnTimer -= dt;
+      const fireDps = 8; // damage per second from fire
+      m.hp -= fireDps * dt;
+      if (m.burnTimer % 1 < dt) fireEffect.emit(m.pos, 5); // periodic fire VFX
+      if (m.hp <= 0) {
+        const idx = merchants.indexOf(m);
+        if (idx >= 0) triggerCapture(m, idx);
         continue;
       }
     }
@@ -6107,6 +6406,8 @@ function updateMerchants(dt: number) {
 
 function triggerCapture(m: MerchantV1, _index: number) {
   if (m.state === 'sinking') return; // prevent double-capture
+  ghostActions |= ACTION_KILLED_ENEMY;
+  if (m.surrendering) ghostActions |= ACTION_CAPTURING;
 
   // In screensaver mode, just sink the ship with visual effects — skip progression/UI
   if (screensaverActive) {
@@ -6199,6 +6500,10 @@ function triggerCapture(m: MerchantV1, _index: number) {
     economy.addReputationTokens(2);
   }
 
+  // Parliament of Knives: crew morale from captures
+  crew.applyChoiceOutcome(m.armed ? 'attack_armed' : 'capture_merchant');
+  crew.boostMorale(2);
+
   // Roll for treasure map drop
   if (events.rollForTreasureMap()) {
     const islands = world.getIslands();
@@ -6275,6 +6580,12 @@ function updateCombat(dt: number) {
 
   combat.update(dt);
 
+  // Chain-Reaction: whirlpool pulls cannonballs toward center
+  const whirlpoolEvt = events.getCurrentEvent();
+  if (whirlpoolEvt && whirlpoolEvt.type === 'whirlpool' && whirlpoolEvt.active) {
+    combat.applyWhirlpoolPull(whirlpoolEvt.pos, 25, 6, dt);
+  }
+
   // Build target list for player cannonballs hitting merchants
   const targets: Array<{pos: THREE.Vector3, hitRadius: number, id: number}> = [];
   for (let i = 0; i < merchants.length; i++) {
@@ -6299,7 +6610,12 @@ function updateCombat(dt: number) {
 
   const hits = combat.checkHits(targets, ghostMissMap);
 
+  // Cataclysm: amplify player damage during spectacles
+  const catDmgMult = cataclysm.getPlayerDamageMultiplier();
+
   for (const hit of hits) {
+    if (catDmgMult !== 1) hit.damage = Math.round(hit.damage * catDmgMult);
+
     // Check if this is a kraken tentacle hit (id >= 10000)
     if (hit.targetId >= 10000) {
       const tentIndex = hit.targetId - 10000;
@@ -6351,6 +6667,8 @@ function updateCombat(dt: number) {
       explosionEffect.emit(playerHit.hitPos, 15);
       audio.playExplosion(playerHit.hitPos, playerPos);
       triggerScreenShake(0.6);
+      ghostActions |= ACTION_TOOK_DAMAGE;
+      shantyEngine?.onDamageTaken();
 
       if (!devGodMode) {
         const stats = progression.getPlayerStats();
@@ -6653,6 +6971,25 @@ function updateEvents(dt: number) {
     weather.setEventOverlay(currentEvt.type);
   }
 
+  // Leviathan chain hunt: damage active leviathan when player fires
+  if (events.isLeviathanActive()) {
+    const levState = events.getLeviathanState();
+    if (levState.phase === 'wounded' || levState.phase === 'returned' || levState.phase === 'climactic') {
+      // Deal constant DPS to represent engagement with the leviathan
+      const levResult = events.damageLeviathanPursuit(12 * dt);
+      if (levResult.fled) {
+        ui.addJournalEntry('The leviathan retreats beneath the waves — it will return.', 'mystic');
+      }
+      if (levResult.defeated) {
+        progression.addScore(2000);
+        economy.addReputationTokens(5);
+        ui.showCapture('+2000 Leviathan Slain!', 1);
+        goldBurst.emit(playerPos, 80);
+        ui.addJournalEntry('The leviathan is vanquished! The seas are calm once more.', 'reward');
+      }
+    }
+  }
+
   // Event completed
   if (result.eventComplete) {
     progression.addEventCompleted();
@@ -6680,6 +7017,11 @@ function updateV2Hud(dt: number) {
   ui.updateHeatMeter(hs.heat, hs.heatLevel, heatSystem.getHeatLevelName());
   const context = getRegionalFactionContext();
   ui.updateV2FactionStatus(context.factionName, context.reputation);
+
+  // Update shanty engine state
+  if (shantyEngine) {
+    shantyEngine.updateState(buildShantyState());
+  }
 }
 
 // ===================================================================
@@ -6792,6 +7134,40 @@ function animate(now: number) {
     updateWaveLifecycle(dt);
     updateCamera(dt);
     narrative.update(dt);
+
+    // Ghost tape recording: sample player state at 4Hz
+    {
+      if (currentBoss) ghostActions |= ACTION_BOSS_ACTIVE;
+      const s = progression.getPlayerStats();
+      ghostTape.record(
+        dt, playerPos.x, playerPos.z, playerAngle, Math.abs(playerSpeed),
+        s.health, s.maxHealth, progression.getCurrentWave(),
+        progression.getScore(), ghostActions,
+      );
+      ghostActions = 0;
+    }
+
+    // Ghost replay: update translucent ghost ship
+    ghostReplay.update(dt);
+    if (ghostReplay.isActive()) {
+      const gInfo = ghostReplay.getCurrentFrameInfo();
+      if (gInfo) ui.showGhostReplayHud(gInfo.wave, gInfo.hpPct, gInfo.speed);
+    } else {
+      ui.hideGhostReplayHud();
+    }
+
+    // Cataclysm: update intensity, apply ocean wave scale + overlay
+    if (cataclysm.isActive()) {
+      const catIntensity = cataclysm.update(dt);
+      const wsMult = cataclysm.getWaveScaleMultiplier();
+      if (wsMult !== 1) {
+        ocean.setWaveScale(weather.getCurrentConfig().waveScale * wsMult);
+      }
+      const catCfg = cataclysm.getConfig();
+      if (catCfg) ui.showCataclysmOverlay(catCfg.type, catIntensity);
+    } else {
+      ui.hideCataclysmOverlay();
+    }
   } else if (gameStarted && gamePaused) {
     updateWeather(dt);
     updateV2Hud(dt);

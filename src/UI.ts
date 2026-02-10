@@ -1711,6 +1711,7 @@ export class UI {
     detail: string,
     options: ChoicePromptOption[],
     resources?: ChoicePromptResourceState,
+    crewOpinionHints?: string[],
   ): Promise<string> {
     if (!this.choicePanelEl) {
       this.choicePanelEl = document.getElementById('choice-panel');
@@ -1804,11 +1805,16 @@ export class UI {
       })
       .join('');
 
+    const crewHtml = crewOpinionHints && crewOpinionHints.length > 0
+      ? `<div class="choice-crew-opinions" style="font-size:0.85em;opacity:0.8;margin:6px 0 4px">${crewOpinionHints.map(h => `<span style="display:inline-block;margin:2px 6px">${UI.escapeChoiceHtml(h)}</span>`).join('')}</div>`
+      : '';
+
     this.choicePanelEl.innerHTML = `
       <div class="choice-shell">
         <h3>${UI.escapeChoiceHtml(title)}</h3>
         <p>${UI.escapeChoiceHtml(detail)}</p>
         ${resourcesHtml}
+        ${crewHtml}
         <div class="choice-options">
           ${optionHtml}
         </div>
@@ -2577,6 +2583,110 @@ export class UI {
     if (this.portCrewHireEl) {
       this.portCrewHireEl.innerHTML = '';
     }
+  }
+
+  // ---------------------------------------------------------------
+  //  V20: Leaderboard panel
+  // ---------------------------------------------------------------
+
+  private leaderboardEl: HTMLElement | null = null;
+
+  showLeaderboard(entries: Array<{ rank: number; playerName: string; score: number; waves: number; shipClass: string; victory: boolean }>): void {
+    if (!this.leaderboardEl) {
+      this.leaderboardEl = document.getElementById('leaderboard-panel');
+    }
+    if (!this.leaderboardEl) return;
+
+    const rows = entries.map(e =>
+      `<tr>
+        <td>${e.rank}</td>
+        <td>${UI.escapeChoiceHtml(e.playerName)}</td>
+        <td>${e.score}</td>
+        <td>${e.waves}</td>
+        <td>${e.shipClass}</td>
+        <td>${e.victory ? '\u2605' : ''}</td>
+      </tr>`,
+    ).join('');
+
+    this.leaderboardEl.innerHTML = `
+      <div class="leaderboard-shell">
+        <h2>Leaderboard</h2>
+        <table class="leaderboard-table">
+          <thead><tr><th>#</th><th>Captain</th><th>Gold</th><th>Waves</th><th>Ship</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <button class="btn-close-leaderboard" type="button">Close</button>
+      </div>
+    `;
+    this.leaderboardEl.style.display = 'flex';
+
+    const closeBtn = this.leaderboardEl.querySelector('.btn-close-leaderboard');
+    closeBtn?.addEventListener('click', () => this.hideLeaderboard());
+  }
+
+  hideLeaderboard(): void {
+    if (this.leaderboardEl) this.leaderboardEl.style.display = 'none';
+  }
+
+  // ---------------------------------------------------------------
+  //  V20: Signal fire UI
+  // ---------------------------------------------------------------
+
+  showSignalFireResult(code: string): void {
+    this.addJournalEntry(`Signal fire lit! Share this code: ${code}`, 'reward');
+  }
+
+  showSignalFireRedeemed(aidType: string, amount: number, heatCost: number): void {
+    this.addJournalEntry(`Signal fire redeemed: +${amount} ${aidType}. Heat +${heatCost}.`, 'reward');
+  }
+
+  // ---------------------------------------------------------------
+  //  V20: Tide omen display
+  // ---------------------------------------------------------------
+
+  showTideOmen(omenName: string, modifiers: Record<string, string>): void {
+    const modLines = Object.entries(modifiers).map(([k, v]) => `${k}: ${v}`).join(', ');
+    this.addJournalEntry(`Sea Omen: ${omenName} (${modLines})`, 'mystic');
+  }
+
+  // ---------------------------------------------------------------
+  //  V20: Cataclysm overlay
+  // ---------------------------------------------------------------
+
+  private cataclysmOverlayEl: HTMLElement | null = null;
+
+  showCataclysmOverlay(type: string, intensity: number): void {
+    if (!this.cataclysmOverlayEl) {
+      this.cataclysmOverlayEl = document.getElementById('cataclysm-overlay');
+    }
+    if (!this.cataclysmOverlayEl) return;
+
+    const color = type === 'eclipse' ? 'rgba(60,20,80'
+      : type === 'eruption' ? 'rgba(200,80,20'
+      : 'rgba(30,60,100';
+    this.cataclysmOverlayEl.style.display = 'block';
+    this.cataclysmOverlayEl.style.background = `${color},${(intensity * 0.25).toFixed(2)})`;
+    this.cataclysmOverlayEl.style.pointerEvents = 'none';
+  }
+
+  hideCataclysmOverlay(): void {
+    if (this.cataclysmOverlayEl) this.cataclysmOverlayEl.style.display = 'none';
+  }
+
+  // ---------------------------------------------------------------
+  //  V20: Ghost replay toggle
+  // ---------------------------------------------------------------
+
+  showGhostReplayHud(wave: number, hpPct: number, speed: number): void {
+    const el = document.getElementById('ghost-replay-hud');
+    if (!el) return;
+    el.style.display = 'block';
+    el.textContent = `Ghost: W${wave} HP:${Math.round(hpPct)}% SPD:${speed.toFixed(1)}`;
+  }
+
+  hideGhostReplayHud(): void {
+    const el = document.getElementById('ghost-replay-hud');
+    if (el) el.style.display = 'none';
   }
 
   // ---------------------------------------------------------------

@@ -701,6 +701,53 @@ export class CombatSystem {
     return n;
   }
 
+  // -----------------------------------------------------------------------
+  //  Chain-Reaction Seas: whirlpool cannonball pull
+  // -----------------------------------------------------------------------
+
+  /** Apply pull force from an active whirlpool to all in-flight cannonballs */
+  applyWhirlpoolPull(
+    center: THREE.Vector3,
+    pullRadius: number,
+    pullStrength: number,
+    dt: number,
+  ): void {
+    for (const b of this.balls) {
+      if (!b.active) continue;
+      const dx = center.x - b.pos.x;
+      const dz = center.z - b.pos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > pullRadius || dist < 0.5) continue;
+
+      const strength = pullStrength * (1 - dist / pullRadius);
+      // Curve cannonball trajectory toward whirlpool center
+      b.vel.x += (dx / dist) * strength * dt;
+      b.vel.z += (dz / dist) * strength * dt;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  //  Chain-Reaction Seas: reef collision damage check
+  // -----------------------------------------------------------------------
+
+  /** Check if a ship position is within reef collision range of any island */
+  static checkReefCollision(
+    shipPos: THREE.Vector3,
+    islands: Array<{ pos: THREE.Vector3; reefRadius: number }>,
+  ): { colliding: boolean; damage: number } {
+    for (const island of islands) {
+      const dx = shipPos.x - island.pos.x;
+      const dz = shipPos.z - island.pos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < island.reefRadius) {
+        // Damage scales with how deep into the reef they are
+        const penetration = 1 - dist / island.reefRadius;
+        return { colliding: true, damage: 5 + penetration * 15 };
+      }
+    }
+    return { colliding: false, damage: 0 };
+  }
+
   /** Cleanup: remove mesh from scene */
   dispose(): void {
     this.scene.remove(this.mesh);

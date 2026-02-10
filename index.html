@@ -1625,6 +1625,58 @@
       background: rgba(35, 23, 14, 0.88);
       transform: translateY(-1px);
     }
+    /* V20: Leaderboard */
+    .leaderboard-shell {
+      width: min(700px, 90vw);
+      max-height: min(80vh, 700px);
+      overflow-y: auto;
+      border: 1px solid rgba(238, 214, 165, 0.45);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(15, 12, 8, 0.96), rgba(18, 15, 10, 0.95));
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+      padding: 24px 32px;
+      font-family: 'Pirata One', cursive;
+      color: #eed6a5;
+      text-align: center;
+    }
+    .leaderboard-shell h2 {
+      font-size: 1.8rem;
+      color: #ffd680;
+      margin-bottom: 16px;
+    }
+    .leaderboard-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+    .leaderboard-table th {
+      color: #c9a96e;
+      border-bottom: 1px solid rgba(238, 214, 165, 0.3);
+      padding: 6px 8px;
+      text-align: left;
+    }
+    .leaderboard-table td {
+      padding: 5px 8px;
+      border-bottom: 1px solid rgba(238, 214, 165, 0.1);
+    }
+    .leaderboard-table tr:nth-child(2n) {
+      background: rgba(238, 214, 165, 0.04);
+    }
+    .btn-close-leaderboard {
+      margin-top: 16px;
+      padding: 10px 28px;
+      font-family: 'Pirata One', cursive;
+      font-size: 1.1rem;
+      color: #eed6a5;
+      background: rgba(100, 60, 20, 0.7);
+      border: 1px solid rgba(238, 214, 165, 0.4);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .btn-close-leaderboard:hover {
+      background: rgba(120, 70, 30, 0.9);
+    }
+
     #codex-panel {
       position: fixed;
       inset: 0;
@@ -2660,6 +2712,7 @@
       <button id="screensaver-btn" type="button">Watch the Seas</button>
       <button id="resume-btn" type="button">Resume Voyage</button>
       <button id="history-btn" type="button">Past Voyages</button>
+      <button id="leaderboard-btn" type="button">Leaderboard</button>
       <button id="editor-btn" type="button" style="display:none;">Level Editor</button>
     </div>
     <div id="run-history-panel" style="display:none;"></div>
@@ -2891,6 +2944,14 @@
     <!-- Treasure Map Indicator -->
     <div id="treasure-map-indicator" style="display:none;">Treasure Map!</div>
 
+    <!-- V20: Leaderboard Panel -->
+    <div id="leaderboard-panel" style="display:none; position:fixed; inset:0; z-index:1100; align-items:center; justify-content:center; background:rgba(0,0,0,0.7);"></div>
+
+    <!-- V20: Cataclysm Overlay -->
+    <div id="cataclysm-overlay" style="display:none; position:fixed; inset:0; z-index:50; pointer-events:none;"></div>
+
+    <!-- V20: Ghost Replay HUD -->
+    <div id="ghost-replay-hud" style="display:none; position:fixed; top:60px; right:16px; z-index:200; font-family:'Pirata One',cursive; color:#88aacc; font-size:0.9rem; text-shadow:0 0 6px rgba(136,170,204,0.5); opacity:0.8;"></div>
 
   </div>
   <div id="joystick-base"><div id="joystick-thumb"></div></div>

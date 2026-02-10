@@ -89,12 +89,43 @@ function emptyResult(): EventUpdateResult {
 //  EventSystem
 // ===================================================================
 
+// ===================================================================
+//  Leviathan Chain Hunt — multi-wave monster pursuit arcs
+// ===================================================================
+
+export type LeviathanPhase = 'dormant' | 'wounded' | 'fled' | 'returned' | 'climactic' | 'defeated';
+
+export interface LeviathanState {
+  phase: LeviathanPhase;
+  hp: number;
+  maxHp: number;
+  woundsDealt: number;       // total damage dealt across encounters
+  encounterCount: number;    // how many times it has appeared
+  waveLastSeen: number;      // wave number when last encountered
+  evolved: boolean;          // true if it returned evolved (stronger)
+  type: 'kraken' | 'serpent'; // which leviathan
+}
+
+function createDefaultLeviathanState(): LeviathanState {
+  return {
+    phase: 'dormant',
+    hp: 0,
+    maxHp: 0,
+    woundsDealt: 0,
+    encounterCount: 0,
+    waveLastSeen: 0,
+    evolved: false,
+    type: 'kraken',
+  };
+}
+
 export class EventSystem {
   private currentEvent: GameEvent | null = null;
   private eventCooldown = 0;
   private treasureMapActive = false;
   private treasureMapIslandIndex = -1;
-  private rollAccumulator = 0; // accumulate dt so we roll once per second
+  private rollAccumulator = 0;
+  private leviathanState: LeviathanState = createDefaultLeviathanState();
 
   constructor() {
     this.reset();
@@ -622,10 +653,91 @@ export class EventSystem {
   reset(): void {
     if (this.currentEvent) this.endCurrentEvent();
     this.currentEvent = null;
-    this.eventCooldown = 10; // short initial cooldown at game start
+    this.eventCooldown = 10;
     this.treasureMapActive = false;
     this.treasureMapIslandIndex = -1;
     this.rollAccumulator = 0;
+    this.leviathanState = createDefaultLeviathanState();
+  }
+
+  // -----------------------------------------------------------------
+  //  Leviathan Chain Hunt
+  // -----------------------------------------------------------------
+
+  getLeviathanState(): LeviathanState {
+    return { ...this.leviathanState };
+  }
+
+  setLeviathanState(state: LeviathanState): void {
+    this.leviathanState = { ...state };
+  }
+
+  /** Trigger a leviathan encounter at the start of a wave (if conditions met) */
+  trySpawnLeviathan(waveNumber: number): boolean {
+    const lev = this.leviathanState;
+
+    // Can't spawn if an event is active
+    if (this.currentEvent) return false;
+
+    // First encounter: random chance starting wave 8
+    if (lev.phase === 'dormant' && waveNumber >= 8) {
+      if (Math.random() < 0.15) {
+        lev.phase = 'wounded';
+        lev.type = Math.random() < 0.5 ? 'kraken' : 'serpent';
+        lev.maxHp = 200 + waveNumber * 20;
+        lev.hp = lev.maxHp;
+        lev.encounterCount = 1;
+        lev.waveLastSeen = waveNumber;
+        return true;
+      }
+      return false;
+    }
+
+    // Return after fleeing: appears 2-3 waves later
+    if (lev.phase === 'fled' && waveNumber >= lev.waveLastSeen + 2) {
+      lev.phase = 'returned';
+      lev.evolved = true;
+      // Evolved: 30% more HP, healed to 60%
+      lev.maxHp = Math.round(lev.maxHp * 1.3);
+      lev.hp = Math.round(lev.maxHp * 0.6);
+      lev.encounterCount++;
+      lev.waveLastSeen = waveNumber;
+      return true;
+    }
+
+    return false;
+  }
+
+  /** Deal damage to the active leviathan. Returns true if it fled or was defeated. */
+  damageLeviathanPursuit(damage: number): { fled: boolean; defeated: boolean } {
+    const lev = this.leviathanState;
+    if (lev.phase !== 'wounded' && lev.phase !== 'returned' && lev.phase !== 'climactic') {
+      return { fled: false, defeated: false };
+    }
+
+    lev.hp -= damage;
+    lev.woundsDealt += damage;
+
+    // Flee threshold: first encounter flees at 40% HP, returned encounter at 20%
+    const fleeThreshold = lev.evolved ? 0.20 : 0.40;
+
+    if (lev.hp <= 0) {
+      lev.hp = 0;
+      lev.phase = 'defeated';
+      return { fled: false, defeated: true };
+    }
+
+    if (!lev.evolved && lev.hp < lev.maxHp * fleeThreshold) {
+      lev.phase = 'fled';
+      return { fled: true, defeated: false };
+    }
+
+    return { fled: false, defeated: false };
+  }
+
+  isLeviathanActive(): boolean {
+    const p = this.leviathanState.phase;
+    return p === 'wounded' || p === 'returned' || p === 'climactic';
   }
 
   // -----------------------------------------------------------------
